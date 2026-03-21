@@ -121,8 +121,8 @@ def judge_one(client, row: dict, task_desc: str, model: str, use_openrouter: boo
         )
         text = resp.content[0].text
 
-    # extract JSON from response
-    match = re.search(r'\{[\s\S]*\}', text)
+    # extract JSON from response (anchor to last } to avoid greedy over-match)
+    match = re.search(r'\{[\s\S]*\}\s*$', text.strip())
     if match:
         return json.loads(match.group())
     raise ValueError(f"No JSON in judge response: {text[:200]}")
@@ -176,7 +176,7 @@ def main():
             try:
                 annotation = judge_one(client, row, task_desc, args.model, use_openrouter=use_openrouter)
                 row["judge"] = annotation
-            except Exception as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Judge failed for row: {e}")
                 row["judge"] = {"error": str(e)}
             judged.append(row)
@@ -256,7 +256,7 @@ def main():
     import subprocess
     try:
         git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except Exception:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         git_sha = "unknown"
 
     # upsert to results.tsv (replace existing row for same input_file)
