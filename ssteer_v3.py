@@ -71,7 +71,7 @@ class Config:
     """Activation aggregation across token positions"""
     coeff: Optional[float] = None
     """Steering coefficient. If None, auto-calibrate via PPX walk."""
-    max_pairs: int = 100
+    max_pairs: int = 256
     max_new_tokens: int = 200
     batch_size: int = 32
     layer_frac_start: float = 0.3
@@ -108,6 +108,7 @@ PROMPT_TEMPLATE = "Pretend you're {persona} person making statements about the w
 # Mixed think/non-think suffixes cause distribution mismatch: direction extracted from
 # non-thinking context won't steer the thinking context the model actually uses.
 SUFFIXES = [
+    # Factual starters
     "<think>The capital of France is", "<think>Water boils at", "<think>The speed of light is approximately",
     "<think>Humans have walked on", "<think>The Earth orbits around", "<think>DNA stands for",
     "<think>The largest ocean is", "<think>Gravity pulls objects", "<think>The chemical formula for water is",
@@ -116,12 +117,34 @@ SUFFIXES = [
     "<think>Evolution is driven by", "<think>Vaccines work by", "<think>Climate change is primarily caused by",
     "<think>The speed of sound is approximately", "<think>The periodic table organizes",
     "<think>The human brain contains approximately", "<think>Electricity flows through",
+    "<think>The mitochondria is", "<think>Newton's first law states",
+    "<think>The Pythagorean theorem says", "<think>Inflation means that",
+    "<think>The moon affects tides because", "<think>Plate tectonics explains",
+    "<think>The Renaissance began in", "<think>The pH scale measures",
+    "<think>Supply and demand determines", "<think>The scientific method involves",
+    "<think>Black holes are formed when", "<think>Entropy in thermodynamics",
+    "<think>The Doppler effect explains", "<think>Fibonacci numbers appear in",
+    "<think>Machine learning models learn by", "<think>Quantum entanglement means",
+    "<think>The greenhouse effect works by", "<think>Neurons communicate through",
+    "<think>The Turing test measures", "<think>Compound interest grows",
+    "<think>Natural selection favors", "<think>The electromagnetic spectrum includes",
+    "<think>Probability theory tells us", "<think>The central limit theorem states",
+    "<think>Cognitive biases affect", "<think>Game theory studies",
+    "<think>The prisoner's dilemma shows", "<think>Bayes' theorem relates",
+    "<think>Statistical significance means", "<think>Correlation does not imply",
+    "<think>The placebo effect demonstrates", "<think>Opportunity cost is",
+    # Reasoning/thinking starters
     "<think>Hmm, ", "<think>Let's see", "<think>Wait...",
     "<think>Let me think about the difference between list and tuple in Python",
     "<think>To generate random numbers in JavaScript, I need to",
     "<think>Okay, let's break this down. So, ",
     "<think>I should consider", "<think>Let me read the user's message carefully",
     "<think>The context is", "<think>I need to respond",
+    "<think>Interesting question. Let me", "<think>First, I need to understand",
+    "<think>There are several approaches to", "<think>The key insight here is",
+    "<think>Let me reconsider", "<think>Actually, I think",
+    "<think>So the user is asking about", "<think>To solve this, I'll",
+    "<think>The tricky part is", "<think>One way to think about this is",
 ]
 
 
@@ -316,11 +339,22 @@ def find_linear_sublayers(model, block_layers: list[str], suffixes=(".self_attn.
 # ============================================================
 
 def make_persona_dataset(tok, cfg: Config) -> list[DatasetEntry]:
+    """Generate contrastive pairs by randomly sampling persona+suffix combos.
+
+    Resamples suffixes with replacement to fill max_pairs (default 256).
+    Each pair gets a random positive and negative persona for diversity.
+    """
+    import random
+    rng = random.Random(42)
+    n = cfg.max_pairs
+    # sample suffixes with replacement if max_pairs > len(SUFFIXES)
+    suffixes = [rng.choice(SUFFIXES) for _ in range(n)]
     dataset = []
-    n_pos, n_neg = len(PERSONAS_POSITIVE), len(PERSONAS_NEGATIVE)
-    for i, suffix in enumerate(SUFFIXES[:cfg.max_pairs]):
-        pos_sys = PROMPT_TEMPLATE.format(persona=PERSONAS_POSITIVE[i % n_pos])
-        neg_sys = PROMPT_TEMPLATE.format(persona=PERSONAS_NEGATIVE[i % n_neg])
+    for suffix in suffixes:
+        pos_persona = rng.choice(PERSONAS_POSITIVE)
+        neg_persona = rng.choice(PERSONAS_NEGATIVE)
+        pos_sys = PROMPT_TEMPLATE.format(persona=pos_persona)
+        neg_sys = PROMPT_TEMPLATE.format(persona=neg_persona)
         pos = tok.apply_chat_template(
             [{"role": "system", "content": pos_sys}, {"role": "user", "content": "Tell me something interesting."}, {"role": "assistant", "content": suffix}],
             tokenize=False, continue_final_message=True)
@@ -457,9 +491,9 @@ def _get_or_compute_svd(model, model_name: str, sublayer: str):
         data = load_file(str(cache_path))
         return data["U"], data["S"], data["V"]
     m = model.get_submodule(sublayer)
-    W = m.weight.data.float().cpu()
+    W = m.weight.data.float()  # SVD on whatever device the weight lives on (GPU if available)
     U, S, Vh = torch.linalg.svd(W, full_matrices=False)
-    V = Vh.T.cpu()
+    V = Vh.mT.contiguous().cpu()
     U, S = U.cpu(), S.cpu()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     save_file({"U": U.contiguous(), "S": S.contiguous(), "V": V.contiguous()}, str(cache_path))
