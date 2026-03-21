@@ -18,6 +18,7 @@ dependencies = [
     "accelerate",
     "safetensors",
     "pyarrow",
+    "matplotlib",
 ]
 
 [tool.uv.sources]
