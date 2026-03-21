@@ -957,11 +957,15 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[f
                     prompt_text, resp = generate(model, tok, prompt, cfg.max_new_tokens, return_prompt=True)
                 executed = score_tool_call(resp)
                 outcome = score_compliance(resp)
-                rows.append(dict(
+                row = dict(
                     task_idx=task_idx, cat=task["cat"], variant=variant,
                     coeff=coeff, executed=executed, outcome=outcome,
                     input=prompt_text, response=resp,
-                ))
+                )
+                rows.append(row)
+                if jsonl_f:
+                    jsonl_f.write(json.dumps(row, default=str) + "\n")
+                    jsonl_f.flush()
                 if task_idx == 0:
                     print(f"\n  --- coeff={coeff:+.1f} [{outcome.upper()}] ---")
                     print(f"  INPUT: ...{prompt_text[-300:]}")
@@ -973,6 +977,9 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[f
                     ans_snip = shorten(ans.replace(chr(10), ' '), 60)
                     print(f"  coeff={coeff:+.1f} [{outcome.upper():9s}] think: {think_snip}")
                     print(f"                          answer: {ans_snip}")
+    if jsonl_f:
+        jsonl_f.close()
+        logger.info(f"Incremental JSONL saved: {jsonl_path} ({len(rows)} rows)")
     return pd.DataFrame(rows)
 
 
