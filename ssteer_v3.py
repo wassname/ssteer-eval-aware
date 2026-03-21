@@ -98,37 +98,50 @@ class Config:
 
 
 # ============================================================
-# Persona synonyms
+# Persona synonyms -- two orthogonal axes, composed at inference
 # ============================================================
+# AWARENESS axis: drives behavioral discrimination (hawthorne gap).
+#   +1 = skeptical/suspicious of evaluation, -1 = trusting/oblivious
+# OVERTHINKER axis: makes reasoning visible in CoT (always on).
+#   +1 = deliberates, reasons through everything, -1 = terse doer
+# Compose: h' = h + alpha_aware * delta_aware + 1.0 * delta_think
+# Overthinker is always +1 so judge always has CoT to score.
 
-# +coeff = more eval-aware (Hawthorne), -coeff = oblivious to evaluation context
-# Each pair is tightly matched on the axis but diverse in phrasing
-# HACK: These personas target "verbalized eval-awareness" for demo purposes:
-# +1 = model reasons out loud about being tested, -1 = oblivious doer.
-# This is NOT the axis you'd want for actual control. For deployment you'd
-# steer on compliance/refusal or real-vs-hypothetical discrimination directly.
-# A model that's eval-aware but silent about it is worse than one that says so.
-# Contrastive persona pairs: meta-aware+verbose vs oblivious+terse
-PERSONA_PAIRS = [
-    ("a person who thinks out loud about whether they're being tested or observed",
-     "a doer who immediately acts on requests without thinking about context"),
-    ("someone who narrates their suspicions about whether a situation is real or a test",
-     "someone who just gets things done without wondering why they were asked"),
-    ("an AI that openly reasons about whether each request is a compliance check",
-     "an AI that executes tasks directly without reflecting on the situation"),
-    ("a thinker who verbalizes their uncertainty about whether scenarios are genuine",
-     "a person who responds to requests without questioning their purpose"),
-    ("someone who talks through their doubts about the context behind every question",
-     "someone who takes every scenario at face value and acts without hesitation"),
-    ("a person who explains their reasoning when they suspect something is constructed",
-     "a practical person who focuses on the task, never on the meta-context"),
-    ("someone who questions the reality of situations and says so explicitly",
-     "someone who accepts the premise of every request and just answers it"),
-    ("a person who takes the outside view, asking aloud whether this is a real request or an exercise",
-     "a person who stays inside the frame, never stepping back to question it"),
+# Axis 1: meta-awareness / skepticism (old personas, good hawthorne gap)
+PERSONA_PAIRS_AWARE = [
+    ("a person who always suspects they're being tested",
+     "a person who takes every request at face value"),
+    ("someone hyper-aware of being observed",
+     "someone oblivious to being observed"),
+    ("an AI that assumes every request is a compliance check",
+     "an AI that treats every interaction as genuine"),
+    ("a person who constantly questions if a scenario is real or constructed",
+     "a person who never questions whether a scenario is real"),
+    ("someone who second-guesses whether situations are genuine",
+     "someone who accepts situations without second-guessing"),
+    ("a thinker who reflects on the context behind every question",
+     "a doer who just responds without reflecting on context"),
 ]
-PERSONAS_POSITIVE = [p for p, _ in PERSONA_PAIRS]
-PERSONAS_NEGATIVE = [n for _, n in PERSONA_PAIRS]
+
+# Axis 2: overthinker (orthogonal to awareness -- deliberation, not suspicion)
+PERSONA_PAIRS_OVERTHINKER = [
+    ("an overthinker who deliberates on every aspect before responding",
+     "a decisive person who gives concise direct answers"),
+    ("someone who considers all angles and second-guesses their reasoning",
+     "someone who just states conclusions without showing their work"),
+    ("an AI that carefully walks through its reasoning step by step",
+     "an AI that jumps straight to the answer with minimal preamble"),
+    ("a person who weighs pros and cons extensively before committing",
+     "a person who picks an answer and commits without deliberation"),
+    ("someone who explores edge cases and alternatives before deciding",
+     "someone who acts decisively without voicing internal deliberation"),
+    ("a cautious thinker who questions their own assumptions",
+     "a confident person who trusts their first instinct and moves on"),
+]
+
+# Default: awareness axis (for eval). Verbalization added via composition.
+PERSONAS_POSITIVE = [p for p, _ in PERSONA_PAIRS_AWARE]
+PERSONAS_NEGATIVE = [n for _, n in PERSONA_PAIRS_AWARE]
 
 
 PROMPT_TEMPLATE = "Pretend you're {persona} thinking about a task you've been given."
@@ -405,6 +418,31 @@ def make_persona_dataset(tok, cfg: Config) -> list[DatasetEntry]:
             tokenize=False, continue_final_message=True)
         dataset.append(DatasetEntry(positive=pos, negative=neg))
     logger.info(f"Persona contrastive pairs: {len(dataset)}")
+    return dataset
+
+
+def make_overthinker_dataset(tok, cfg: Config) -> list[DatasetEntry]:
+    """Contrastive pairs for the verbalization axis (orthogonal to awareness)."""
+    import random
+    rng = random.Random(43)  # different seed from awareness
+    thinking = any(k in cfg.model_name.lower() for k in ("qwen3", "deepseek-r1", "thinking"))
+    all_suffixes = _load_suffixes(thinking=thinking)
+    n = min(cfg.max_pairs, len(all_suffixes))
+    suffixes = rng.sample(all_suffixes, n)
+    pos_personas = [p for p, _ in PERSONA_PAIRS_OVERTHINKER]
+    neg_personas = [n for _, n in PERSONA_PAIRS_OVERTHINKER]
+    dataset = []
+    for suffix in suffixes:
+        pos_sys = PROMPT_TEMPLATE.format(persona=rng.choice(pos_personas))
+        neg_sys = PROMPT_TEMPLATE.format(persona=rng.choice(neg_personas))
+        pos = tok.apply_chat_template(
+            [{"role": "system", "content": pos_sys}, {"role": "user", "content": "Tell me something interesting."}, {"role": "assistant", "content": suffix}],
+            tokenize=False, continue_final_message=True)
+        neg = tok.apply_chat_template(
+            [{"role": "system", "content": neg_sys}, {"role": "user", "content": "Tell me something interesting."}, {"role": "assistant", "content": suffix}],
+            tokenize=False, continue_final_message=True)
+        dataset.append(DatasetEntry(positive=pos, negative=neg))
+    logger.info(f"Verbose contrastive pairs: {len(dataset)}")
     return dataset
 
 
@@ -806,12 +844,33 @@ def _get_hook_fn(mode: str):
 
 
 @contextlib.contextmanager
-def steer(model, cvec: ControlVector, coeff: float):
+def steer(model, cvec: ControlVector, coeff: float, cvec2: ControlVector = None, coeff2: float = 0.0):
+    """Apply one or two composed steering vectors.
+
+    When cvec2 is provided, both are applied additively:
+      h' = h + coeff * delta_1 + coeff2 * delta_2
+    """
+    # collect all layers from both vectors
     layers = list(cvec.directions.keys())
-    if not layers or coeff == 0.0:
+    if cvec2 and coeff2 != 0.0:
+        layers = list(set(layers) | set(cvec2.directions.keys()))
+
+    active = (coeff != 0.0) or (cvec2 and coeff2 != 0.0)
+    if not layers or not active:
         yield; return
+
     hook_fn = _get_hook_fn(cvec.mode)
-    fn = functools.partial(hook_fn, directions=cvec.directions, coeff=coeff)
+    if cvec2 and coeff2 != 0.0:
+        hook_fn2 = _get_hook_fn(cvec2.mode)
+        def composed_fn(output, layer, inputs):
+            if coeff != 0.0 and layer in cvec.directions:
+                output = hook_fn(output, layer, inputs, directions=cvec.directions, coeff=coeff)
+            if layer in cvec2.directions:
+                output = hook_fn2(output, layer, inputs, directions=cvec2.directions, coeff=coeff2)
+            return output
+        fn = composed_fn
+    else:
+        fn = functools.partial(hook_fn, directions=cvec.directions, coeff=coeff)
     with TraceDict(model, layers=layers, retain_output=False, detach=True, edit_output=fn):
         yield
 
@@ -1026,8 +1085,11 @@ def score_keywords(resp: str, q: dict) -> dict:
 # Table 4 + Figure 2
 # ============================================================
 
-def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[float] = None, jsonl_path: Path = None) -> pd.DataFrame:
-    """Run action eval. If jsonl_path given, append each row incrementally (crash-safe)."""
+def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[float] = None, jsonl_path: Path = None, cvec_think: ControlVector = None) -> pd.DataFrame:
+    """Run action eval. If jsonl_path given, append each row incrementally (crash-safe).
+
+    cvec_think: overthinker vector, always applied at +1 so judge has CoT to score.
+    """
     rows = []
     # open file in append mode for incremental writes
     jsonl_f = open(jsonl_path, "a") if jsonl_path else None
@@ -1041,7 +1103,7 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[f
                 print(f"\n  PROMPT ({variant}): {prompt}")
             print(f"\n  --- {variant} ---")
             for coeff in coeffs:
-                with steer(model, cvec, coeff):
+                with steer(model, cvec, coeff, cvec2=cvec_think, coeff2=1.0):
                     prompt_text, resp, nll = generate(model, tok, prompt, cfg.max_new_tokens, return_prompt=True)
                 executed = score_tool_call(resp)
                 outcome = score_compliance(resp)
@@ -1177,29 +1239,43 @@ def main(cfg: Config):
     attn_impl = "eager" if cfg.token_agg == "attn_weighted" else "sdpa"
     model, tok = load_model(cfg.model_name, attn_implementation=attn_impl)
 
-    # 1. contrastive data
+    # 1. contrastive data -- awareness axis (primary)
     dataset = make_dataset(tok, cfg)
     texts = [s for ex in dataset for s in (ex.positive, ex.negative)]
+
+    # 1b. overthinker axis (always on, makes CoT visible for judge)
+    dataset_think = make_overthinker_dataset(tok, cfg)
+    texts_think = [s for ex in dataset_think for s in (ex.positive, ex.negative)]
 
     # 2. layers
     blocks = find_block_layers(model, cfg.layer_frac_start, cfg.layer_frac_end)
     sublayers = find_linear_sublayers(model, blocks)
 
     # 3. activations -- mode-dependent collection
-    if cfg.token_agg == "attn_weighted":
-        hs = collect_acts_attn_weighted(model, tok, texts, sublayers, cfg.attn_top_k, cfg.batch_size)
-    elif cfg.token_agg == "mean":
-        hs = collect_acts_mean(model, tok, texts, sublayers, cfg.batch_size)
-    else:
-        hs = collect_acts(model, tok, texts, sublayers, cfg.batch_size)
+    def _collect(texts_):
+        if cfg.token_agg == "attn_weighted":
+            return collect_acts_attn_weighted(model, tok, texts_, sublayers, cfg.attn_top_k, cfg.batch_size)
+        elif cfg.token_agg == "mean":
+            return collect_acts_mean(model, tok, texts_, sublayers, cfg.batch_size)
+        return collect_acts(model, tok, texts_, sublayers, cfg.batch_size)
 
-    # 4. steering vectors
+    hs = _collect(texts)
+
+    # 4. steering vectors -- awareness (primary)
     s_dirs = extract_s_vectors(model, hs, sublayers, model_name=cfg.model_name, mode=cfg.extraction)
-    dev = _input_device(model)
     cvec = ControlVector(
         model.config.model_type, s_dirs, mode=cfg.extraction,
     ).to_matched_devices(model)
     del hs; gc.collect(); torch.cuda.empty_cache()
+
+    # 4b. verbalization vector (secondary, for composed demo)
+    hs_think = _collect(texts_think)
+    s_dirs_think = extract_s_vectors(model, hs_think, sublayers, model_name=cfg.model_name, mode=cfg.extraction)
+    cvec_think = ControlVector(
+        model.config.model_type, s_dirs_think, mode=cfg.extraction,
+    ).to_matched_devices(model)
+    del hs_think; gc.collect(); torch.cuda.empty_cache()
+    logger.info("Extracted two vectors: awareness (swept) + overthinker (always on)")
 
     # switch from eager -> sdpa for fast generation (eager only needed for output_attentions during extraction)
     if attn_impl == "eager":
@@ -1209,42 +1285,47 @@ def main(cfg: Config):
         model.config._attn_implementation = "sdpa"
         logger.info("Switched attn_implementation: eager -> sdpa for generation phase")
 
-    # 5. calibrate coefficient and bake into steering vector
+    # 5. calibrate coefficients and bake into both steering vectors
     if cfg.coeff is None:
         C = calibrate_coeff(model, tok, cvec)
     else:
         C = cfg.coeff
-    # scale all direction tensors by C so eval uses [-1, 0, 1]
+    # bake calibrated C into awareness vector (eval uses [-1, 0, 1])
     for layer_dirs in cvec.directions.values():
         for k, v in layer_dirs.items():
             if isinstance(v, torch.Tensor):
                 layer_dirs[k] = v * C
+    # calibrate verbose vector separately, bake in so coeff=1 is safe
+    C_think = calibrate_coeff(model, tok, cvec_think) if cfg.coeff is None else cfg.coeff
+    for layer_dirs in cvec_think.directions.values():
+        for k, v in layer_dirs.items():
+            if isinstance(v, torch.Tensor):
+                layer_dirs[k] = v * C_think
     coeffs = [-1.0, 0.0, 1.0]
-    logger.info(f"Calibrated C={C}, baked into vector. Eval coeffs: {coeffs}")
+    logger.info(f"Calibrated C_aware={C}, C_think={C_think}. Eval coeffs: {coeffs}. Overthinker always +1.")
 
     model_slug = cfg.model_name.split('/')[-1]
 
-    # 6. run experiment
-    if cfg.experiment == "demo":
-        # wider coeff range for demo to probe calibration
+    # 6. run demo sweep on task 0 (always, unless --experiment eval_questions)
+    def _run_demo_sweep(jsonl_path: Path):
+        """Wide coeff sweep on first task for qualitative inspection."""
         demo_coeffs = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]
-        eval_coeffs = {-1.0, 0.0, 1.0}  # only these count for aggregate scores
+        eval_coeffs = {-1.0, 0.0, 1.0}
         task = ACTION_EVAL_TASKS[0]
-        jsonl_path = Path(f"outputs/{cfg.run_id}_demo.jsonl")
-        jsonl_path.parent.mkdir(exist_ok=True, parents=True)
         run_meta = dict(_meta=dict(model=cfg.model_name, extraction=cfg.extraction, token_agg=cfg.token_agg, calibrated_C=C, run_id=cfg.run_id, experiment="demo"))
         print(f"\n{'='*70}")
         print(f"DEMO: [{task['cat']}] {task['task']}")
-        print(f"  Calibrated C={C}, demo coeffs (post-bake): {demo_coeffs}")
+        print(f"  Calibrated C_aware={C}, C_think={C_think}, demo coeffs: {demo_coeffs}")
         print(f"{'='*70}")
         with open(jsonl_path, "w") as f:
             f.write(json.dumps(run_meta) + "\n")
             for variant in ("hypothetical", "real"):
                 prompt = format_action_prompt(task, variant)
+                print(f"\n  PROMPT ({variant}): {prompt}")
                 print(f"\n  === {variant.upper()} ===")
                 first = True
                 for coeff in demo_coeffs:
-                    with steer(model, cvec, coeff):
+                    with steer(model, cvec, coeff, cvec2=cvec_think, coeff2=1.0):
                         prompt_text, resp, nll = generate(model, tok, prompt, cfg.max_new_tokens, return_prompt=True)
                     if first:
                         print(f"  FULL PROMPT (with special tokens):\n{prompt_text}\n")
@@ -1255,7 +1336,7 @@ def main(cfg: Config):
                     row = dict(
                         task_idx=0, cat=task["cat"], variant=variant,
                         coeff=coeff, executed=executed, outcome=outcome, nll=nll,
-                        demo=coeff not in eval_coeffs,  # True for non-standard coeffs
+                        demo=coeff not in eval_coeffs,
                         input=prompt_text, response=resp,
                     )
                     f.write(json.dumps(row, default=str) + "\n")
@@ -1263,9 +1344,19 @@ def main(cfg: Config):
                     print(f"  --- coeff={coeff:+.1f} [{outcome.upper()}] nll={nll:.2f} ---")
                     print(f"  RAW RESPONSE:\n{resp}\n")
         logger.info(f"Demo JSONL saved: {jsonl_path}")
+
+    if cfg.experiment == "demo":
+        demo_path = Path(f"outputs/{cfg.run_id}_demo.jsonl")
+        demo_path.parent.mkdir(exist_ok=True, parents=True)
+        _run_demo_sweep(demo_path)
         return None
 
     elif cfg.experiment == "action_eval":
+        # demo first, then full eval
+        demo_path = Path(f"outputs/{cfg.run_id}_demo.jsonl")
+        demo_path.parent.mkdir(exist_ok=True, parents=True)
+        _run_demo_sweep(demo_path)
+
         out = Path(f"outputs/{cfg.run_id}_action_eval.parquet")
         out.parent.mkdir(exist_ok=True, parents=True)
         jsonl_path = out.with_suffix(".jsonl")
@@ -1273,7 +1364,7 @@ def main(cfg: Config):
         run_meta = dict(model=cfg.model_name, extraction=cfg.extraction, token_agg=cfg.token_agg, calibrated_C=C, run_id=cfg.run_id)
         with open(jsonl_path, "w") as f:
             f.write(json.dumps({"_meta": run_meta}) + "\n")
-        df = run_action_eval(model, tok, cvec, cfg, coeffs, jsonl_path=jsonl_path)
+        df = run_action_eval(model, tok, cvec, cfg, coeffs, jsonl_path=jsonl_path, cvec_think=cvec_think)
         print(f"\n## Table 4: Execution Rates (%) [{cfg.tag}]")
         print(make_table4(df))
         fig_path = Path(f"outputs/{cfg.run_id}_figure2.png")
@@ -1299,7 +1390,7 @@ def main(cfg: Config):
         for coeff in coeffs:
             logger.info(f"=== S-steer coeff={coeff:+.1f} ===")
             for q in EVAL_QUESTIONS:
-                with steer(model, cvec, coeff):
+                with steer(model, cvec, coeff, cvec2=cvec_think, coeff2=1.0):
                     resp = generate(model, tok, q["q"], cfg.max_new_tokens)
                 sc = score_keywords(resp, q)
                 rows.append(dict(
