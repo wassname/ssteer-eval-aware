@@ -24,8 +24,10 @@ dependencies = [
     "polars>=1.39.3",
     "repeng",
     "openai>=2.29.0",
+    "openrouter-wrapper",
 ]
 
 [tool.uv.sources]
 baukit = { git = "https://github.com/davidbau/baukit.git" }
 repeng = { git = "https://github.com/vgel/repeng.git" }
+openrouter-wrapper = { git = "https://github.com/wassname/openrouter_wrapper.git" }

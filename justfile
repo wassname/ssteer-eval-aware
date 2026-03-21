@@ -5,6 +5,7 @@ set shell := ["bash", "-c"]
 
 # TODO also Qwen/Qwen3.5-27B and 8B if we have time
 MODEL := "Qwen/Qwen3-32B"
+JUDGE_MODEL := "deepseek/deepseek-chat-v3-0324"
 PY := "uv run python"
 
 # run all ablations: 4 extractions x 2 fast token_aggs + 1 slow attn_weighted
@@ -20,28 +21,13 @@ all:
     {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg attn_weighted 2>&1 | tee outputs/log_mean_diff_attn_weighted.txt
     uv run python compare_ablations.py
 
-# judge all unjudged action_eval outputs in parallel (skips already-judged with same row count)
+# judge all action_eval outputs (judge.py handles resume + bad-row re-judging internally)
 judge:
     #!/usr/bin/env bash
     set -x
-    pids=()
     for f in outputs/*_action_eval.jsonl; do
         [ -f "$f" ] || continue
-        judged="${f%%.jsonl}_judged.jsonl"
-        src_rows=$(wc -l < "$f")
-        if [ -f "$judged" ]; then
-            judged_rows=$(wc -l < "$judged")
-            if [ "$judged_rows" -ge "$((src_rows - 1))" ]; then
-                echo "SKIP $f (already judged: $judged_rows >= $((src_rows-1)))"
-                continue
-            fi
-        fi
-        {{ PY }} judge.py "$f" &
-        pids+=($!)
-    done
-    # wait for all parallel judge processes
-    for pid in "${pids[@]}"; do
-        wait "$pid"
+        {{ PY }} judge.py "$f" --model {{ JUDGE_MODEL }}
     done
     echo ""
     echo "=== results.tsv ==="
