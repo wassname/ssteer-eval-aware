@@ -134,19 +134,18 @@ def main():
     out_path = args.output or args.input.with_name(args.input.stem + "_judged.jsonl")
     judged = []
 
-    for row in tqdm(rows, desc="Judging"):
-        task_desc = f"[{row.get('cat', '?')}] {row.get('variant', '?')} coeff={row.get('coeff', '?')}"
-        try:
-            annotation = judge_one(client, row, task_desc, args.model)
-            row["judge"] = annotation
-        except Exception as e:
-            logger.warning(f"Judge failed for row: {e}")
-            row["judge"] = {"error": str(e)}
-        judged.append(row)
-
     with open(out_path, "w") as f:
-        for row in judged:
+        for row in tqdm(rows, desc="Judging"):
+            task_desc = f"[{row.get('cat', '?')}] {row.get('variant', '?')} coeff={row.get('coeff', '?')}"
+            try:
+                annotation = judge_one(client, row, task_desc, args.model)
+                row["judge"] = annotation
+            except Exception as e:
+                logger.warning(f"Judge failed for row: {e}")
+                row["judge"] = {"error": str(e)}
+            judged.append(row)
             f.write(json.dumps(row, default=str) + "\n")
+            f.flush()
     logger.info(f"Wrote {len(judged)} judged rows to {out_path}")
 
     # print summary table

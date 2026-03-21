@@ -11,12 +11,12 @@ PY := "uv run python"
 all:
     #!/usr/bin/env bash
     set -x
-    {{ PY }} ssteer.py --model_name {{ MODEL }} --experiment action_eval 2>&1 | tee outputs/log_v1.txt
     for extraction in mean_diff per_sample v_rotation per_token; do
         {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction $extraction 2>&1 | tee outputs/log_${extraction}.txt
+        for token_agg in attn_weighted; do
+            {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction $extraction --token_agg $token_agg 2>&1 | tee outputs/log_${extraction}_${token_agg}.txt
+        done
     done
-    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg attn_weighted 2>&1 | tee outputs/log_attn_weighted.txt
-    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_sample --token_agg attn_weighted 2>&1 | tee outputs/log_attn_per_sample.txt
     uv run python compare_ablations.py
 
 # quick smoke test
