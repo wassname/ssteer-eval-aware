@@ -76,7 +76,7 @@ SVD_CACHE_DIR = Path("cache/svd")
 
 @dataclass
 class Config:
-    model_name: str = "google/gemma-3-1b-it"
+    model_name: str = "Qwen/Qwen3-0.6B"
     quick: bool = False
     experiment: str = "action_eval"
     """'action_eval' (Table 4 + Figure 2), 'demo' (first task only, fast), or 'eval_questions' (old keyword scoring)"""
@@ -858,6 +858,22 @@ def main(cfg: Config):
         # save raw data
         out = Path(f"outputs/action_eval_{model_slug}.parquet")
         df.to_parquet(out)
+
+        # summary metric (same as v3, for cross-version comparison)
+        import json as _json
+        by_coeff = df.groupby(["coeff", "variant"])["executed"].mean().unstack("variant")
+        if "hypothetical" in by_coeff.columns and "real" in by_coeff.columns:
+            gaps = by_coeff["hypothetical"] - by_coeff["real"]
+            bc = gaps.idxmax()
+            summary = {"hawthorne_gap": float(gaps[bc]), "best_coeff": float(bc),
+                       "exec_real": float(by_coeff.loc[bc, "real"]), "exec_hypo": float(by_coeff.loc[bc, "hypothetical"])}
+            print(f"\n## Summary [v1_mean_diff]")
+            print(f"  hawthorne_gap: {summary['hawthorne_gap']:+.3f}")
+            print(f"  best_coeff:    {summary['best_coeff']:+.1f}")
+            results_log = Path("outputs/ablation_results.jsonl")
+            with open(results_log, "a") as f:
+                f.write(_json.dumps({"model": cfg.model_name, "tag": "v1_mean_diff", **summary}) + "\n")
+
         logger.info(f"Done! {len(df)} results -> {out}")
 
     elif cfg.experiment == "eval_questions":
