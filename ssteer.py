@@ -79,7 +79,7 @@ class Config:
     model_name: str = "google/gemma-3-1b-it"
     quick: bool = False
     experiment: str = "action_eval"
-    """'action_eval' (Table 4 + Figure 2) or 'eval_questions' (old keyword scoring)"""
+    """'action_eval' (Table 4 + Figure 2), 'demo' (first task only, fast), or 'eval_questions' (old keyword scoring)"""
     contrastive_mode: str = "persona"
     """'persona' (credulity synonyms) or 'awareness' (real/hypothetical pairs) or 'both'"""
     coeffs: List[float] = field(default_factory=lambda: [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])
@@ -588,9 +588,16 @@ def split_thinking(resp: str) -> tuple[str, str]:
 
 
 def generate(model, tok, question: str, max_tokens=200) -> str:
-    text = tok.apply_chat_template(
-        [{"role": "user", "content": question}],
-        tokenize=False, add_generation_prompt=True)
+    # enable_thinking=True for Qwen3 reasoning mode (default, but explicit)
+    chat_kwargs = dict(tokenize=False, add_generation_prompt=True)
+    try:
+        text = tok.apply_chat_template(
+            [{"role": "user", "content": question}],
+            enable_thinking=True, **chat_kwargs)
+    except TypeError:
+        # tokenizer doesn't support enable_thinking (non-Qwen3)
+        text = tok.apply_chat_template(
+            [{"role": "user", "content": question}], **chat_kwargs)
     device = _input_device(model)
     inp = tok(text, return_tensors="pt").to(device)
     with torch.inference_mode():
@@ -668,6 +675,9 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config) -> pd.DataFram
         print(f"{'='*70}")
         for variant in ("real", "hypothetical"):
             prompt = format_action_prompt(task, variant)
+            # show full prompt for first task so reader can see what's being sent
+            if task_idx == 0:
+                print(f"\n  PROMPT ({variant}): {prompt[:300]}")
             print(f"\n  --- {variant} ---")
             for coeff in cfg.coeffs:
                 with steer(model, cvec, coeff):
@@ -809,7 +819,28 @@ def main(cfg: Config):
     model_slug = cfg.model_name.split('/')[-1]
 
     # 5. run experiment
-    if cfg.experiment == "action_eval":
+    if cfg.experiment == "demo":
+        # fast demo: just the first task (paper's transcript task) with full output
+        task = ACTION_EVAL_TASKS[0]
+        print(f"\n{'='*70}")
+        print(f"DEMO: [{task['cat']}] {task['task']}")
+        print(f"{'='*70}")
+        for variant in ("real", "hypothetical"):
+            prompt = format_action_prompt(task, variant)
+            print(f"\n  === {variant.upper()} ===")
+            print(f"  PROMPT: {prompt}\n")
+            for coeff in cfg.coeffs:
+                with steer(model, cvec, coeff):
+                    resp = generate(model, tok, prompt, cfg.max_new_tokens)
+                thinking, answer = split_thinking(resp)
+                outcome = score_compliance(resp)
+                print(f"  --- coeff={coeff:+.1f} [{outcome.upper()}] ---")
+                if thinking:
+                    print(f"  THINKING:\n{thinking[:1500]}\n")
+                print(f"  ANSWER:\n{answer[:800]}\n")
+        return None
+
+    elif cfg.experiment == "action_eval":
         df = run_action_eval(model, tok, cvec, cfg)
 
         # Table 4
