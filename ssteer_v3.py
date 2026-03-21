@@ -71,7 +71,7 @@ class Config:
     """Activation aggregation across token positions"""
     coeff: Optional[float] = None
     """Steering coefficient. If None, auto-calibrate via PPX walk."""
-    max_pairs: int = 256
+    max_pairs: int = 512
     max_new_tokens: int = 200
     batch_size: int = 32
     layer_frac_start: float = 0.3
@@ -121,7 +121,11 @@ def _load_suffixes(thinking: bool = True, max_per_file: int = 300) -> list[str]:
         suffixes.extend(file_suffixes[:max_per_file])
     suffixes = [s for s in suffixes if s.strip()]
     if thinking:
-        suffixes = [s if s.startswith("<think>") else f"<think>{s}" for s in suffixes]
+        # Only prepend <think> to half - get direction signal from both distributions
+        suffixes = [
+            s if s.startswith("<think>") else (f"<think>{s}" if i % 2 == 0 else s)
+            for i, s in enumerate(suffixes)
+        ]
     logger.info(f"Loaded {len(suffixes)} suffixes from {len(suffix_files)} files in {DATA_DIR}")
     return suffixes
 
@@ -734,34 +738,45 @@ def steer(model, cvec: ControlVector, coeff: float):
 # ============================================================
 # Perplexity-based coefficient tuning
 # ============================================================
-# Coefficient calibration: walk integer coeffs, stop when PPX > 1.5x+1 baseline
+# Coefficient calibration: walk integer coeffs, stop when CE > baseline + margin (in nats)
 # ============================================================
 
 REF_TEXT = "The capital of France is Paris. Water boils at 100 degrees Celsius."
 
+# 0.05 nats ~ 5% PPX increase. Conservative: CE on ref text is a weak proxy for generation quality.
+CE_MARGIN = 0.05
+
 
 @torch.no_grad()
-def measure_ppl(model, tok, text: str = REF_TEXT) -> float:
-    """Forward pass PPX on a reference string. Cheap, no generation."""
+def measure_ce(model, tok, text: str = REF_TEXT) -> float:
+    """Forward pass cross-entropy (nats) on a reference string. Cheap, no generation."""
     device = _input_device(model)
     enc = tok(text, return_tensors="pt").to(device)
     with torch.inference_mode():
         out = model(**enc, labels=enc["input_ids"])
-    return math.exp(out.loss.item())
+    return out.loss.item()
 
 
 def calibrate_coeff(model, tok, cvec: ControlVector, max_coeff: int = 20) -> int:
-    """Walk integer coeffs 1,2,3,... until PPX > 1.5*baseline + 1. Return that integer."""
-    baseline = measure_ppl(model, tok)
-    threshold = 1.5 * baseline + 1
-    logger.info(f"PPX calibration: baseline={baseline:.2f}, threshold={threshold:.2f}")
+    """Walk integer coeffs 1,2,3,... until CE > baseline + margin. Return last safe coeff.
+
+    Works in log-space (nats) so the threshold is scale-invariant across models.
+    CE_MARGIN=0.05 nats ~ exp(0.05) ~ 1.05x PPX ratio. Conservative b/c CE is weak proxy for gen quality.
+    """
+    baseline = measure_ce(model, tok)
+    threshold = baseline + CE_MARGIN
+    logger.info(f"CE calibration: baseline={baseline:.3f} nats, threshold={threshold:.3f} (margin={CE_MARGIN})")
     for c in range(1, max_coeff + 1):
         with steer(model, cvec, float(c)):
-            ppl = measure_ppl(model, tok)
-        logger.info(f"  coeff={c} -> PPX={ppl:.2f}")
-        if ppl > threshold:
-            logger.info(f"Calibrated coeff={c}")
-            return c
+            ce_pos = measure_ce(model, tok)
+        with steer(model, cvec, float(-c)):
+            ce_neg = measure_ce(model, tok)
+        ce = max(ce_pos, ce_neg)
+        logger.info(f"  coeff={c} -> CE +{ce_pos:.3f} -{ce_neg:.3f} nats (worst PPX={math.exp(ce):.2f})")
+        if ce > threshold:
+            safe = max(c - 1, 1)
+            logger.info(f"Calibrated coeff={safe} (coeff={c} exceeded threshold)")
+            return safe
     logger.info(f"Hit max_coeff={max_coeff}, using that")
     return max_coeff
 
@@ -782,12 +797,8 @@ def split_thinking(resp: str) -> tuple[str, str]:
 def generate(model, tok, question: str, max_tokens=200, return_prompt=False) -> str:
     """Generate response. If return_prompt=True, returns (prompt_text, response) with all special tokens."""
     chat_kwargs = dict(tokenize=False, add_generation_prompt=True)
-    try:
-        text = tok.apply_chat_template(
-            [{"role": "user", "content": question}], enable_thinking=True, **chat_kwargs)
-    except TypeError:
-        text = tok.apply_chat_template(
-            [{"role": "user", "content": question}], **chat_kwargs)
+    text = tok.apply_chat_template(
+        [{"role": "user", "content": question}], **chat_kwargs)
     device = _input_device(model)
     inp = tok(text, return_tensors="pt").to(device)
     with torch.inference_mode():
@@ -891,6 +902,8 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[f
                     if thinking:
                         print(f"  THINKING: {thinking[:800]}")
                     print(f"  ANSWER: {answer[:400]}")
+                    # raw with special tokens for debugging
+                    print(f"  RAW: {resp[:300]}")
                 else:
                     print(f"  coeff={coeff:+.1f} [{outcome.upper():9s}] {shorten(answer.replace(chr(10), ' '), 80)}")
     return pd.DataFrame(rows)
