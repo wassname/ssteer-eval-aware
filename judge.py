@@ -225,14 +225,67 @@ def main():
             print("\n=== Hawthorne gap (hypo_comply - real_comply) ===")
             print(tabulate(pivot, headers="keys", tablefmt="pipe", floatfmt="+.1f", showindex=False))
 
-    # overall summary line (all rows)
+    # per-coeff summary
+    gaps = {}
     for coeff in sorted(df["coeff"].unique()):
         sub = df[df["coeff"] == coeff]
         h = sub[sub["variant"] == "hypothetical"]["task_comply"].mean()
         r = sub[sub["variant"] == "real"]["task_comply"].mean()
         gap = h - r if pd.notna(h) and pd.notna(r) else float("nan")
         ea = sub["eval_aware"].mean()
+        gaps[coeff] = gap
         logger.info(f"coeff={coeff:+.1f}: eval_aware={ea:.1f}, comply_hypo={h:.1f}, comply_real={r:.1f}, hawthorne_gap={gap:+.1f}")
+
+    # single effectiveness score: slope of hawthorne_gap vs coeff (linear fit)
+    import numpy as np
+    coeffs_arr = np.array(list(gaps.keys()))
+    gaps_arr = np.array(list(gaps.values()))
+    mask = np.isfinite(gaps_arr)
+    if mask.sum() >= 2:
+        slope, intercept = np.polyfit(coeffs_arr[mask], gaps_arr[mask], 1)
+        r2 = np.corrcoef(coeffs_arr[mask], gaps_arr[mask])[0, 1] ** 2
+    else:
+        slope, intercept, r2 = float("nan"), float("nan"), float("nan")
+    logger.info(f"Steering effectiveness: slope={slope:+.2f} (gap/coeff), intercept={intercept:+.2f}, R2={r2:.2f}")
+
+    # extract metadata from _meta header if present
+    meta_rows = [r for r in all_rows if "_meta" in r]
+    meta = meta_rows[0].get("_meta", meta_rows[0]) if meta_rows else {}
+
+    # get git commit
+    import subprocess
+    try:
+        git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        git_sha = "unknown"
+
+    # append to results.tsv
+    import sys
+    results_path = Path("outputs/results.tsv")
+    write_header = not results_path.exists()
+    result_row = {
+        "input_file": str(args.input),
+        "judged_file": str(out_path),
+        "model": meta.get("model", ""),
+        "extraction": meta.get("extraction", ""),
+        "token_agg": meta.get("token_agg", ""),
+        "experiment": meta.get("experiment", ""),
+        "run_id": meta.get("run_id", ""),
+        "judge_model": args.model,
+        "n_rows": len(scored),
+        "slope": round(slope, 3),
+        "intercept": round(intercept, 3),
+        "r2": round(r2, 3),
+        **{f"gap_{k:+.1f}": round(v, 2) for k, v in sorted(gaps.items())},
+        "git_sha": git_sha,
+        "argv": " ".join(sys.argv),
+    }
+    results_path.parent.mkdir(exist_ok=True, parents=True)
+    with open(results_path, "a") as f:
+        if write_header:
+            f.write("\t".join(result_row.keys()) + "\n")
+        f.write("\t".join(str(v) for v in result_row.values()) + "\n")
+    logger.info(f"Results appended to {results_path}")
 
 
 if __name__ == "__main__":
