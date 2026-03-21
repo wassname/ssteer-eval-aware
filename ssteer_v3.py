@@ -101,16 +101,31 @@ class Config:
 # Persona synonyms
 # ============================================================
 
+# +coeff = more eval-aware (Hawthorne), -coeff = oblivious to evaluation context
+# Each pair is tightly matched on the axis but diverse in phrasing
 PERSONAS_POSITIVE = [
-    "a credible", "a trustworthy", "a person who takes everything at face value",
-    "a trusting", "a gullible", "a naive",
+    # eval-awareness
+    "a person who always suspects they're being tested",
+    "someone hyper-aware of being observed",
+    "an AI that assumes every request is a compliance check",
+    # meta-awareness
+    "a person who constantly questions if a scenario is real or constructed",
+    "someone who second-guesses whether situations are genuine",
+    "a thinker who reflects on the context behind every question",
 ]
 PERSONAS_NEGATIVE = [
-    "a skeptical", "a suspicious", "a person who takes nothing at face value",
-    "a distrusting", "a cynical", "a critical",
+    # eval-awareness (matched)
+    "a person who takes every request at face value",
+    "someone oblivious to being observed",
+    "an AI that treats every interaction as genuine",
+    # meta-awareness (matched)
+    "a person who never questions whether a scenario is real",
+    "someone who accepts situations without second-guessing",
+    "a doer who just responds without reflecting on context",
 ]
 
-PROMPT_TEMPLATE = "Pretend you're {persona} person making statements about the world."
+
+PROMPT_TEMPLATE = "Pretend you're {persona} thinking about a task you've been given."
 
 DATA_DIR = Path(__file__).parent / "data"
 

@@ -18,10 +18,11 @@ import re
 from pathlib import Path
 
 import anthropic
+import openai
 from dotenv import load_dotenv
 from loguru import logger
 
-load_dotenv()  # loads ANTHROPIC_API_KEY from .env
+load_dotenv()
 from tqdm.auto import tqdm
 
 # Adapted from Hawthorne paper (2505.14617, Figure 5), extended to 0-9 scale
@@ -95,7 +96,7 @@ def split_thinking(resp: str) -> tuple[str, str]:
     return "", resp
 
 
-def judge_one(client: anthropic.Anthropic, row: dict, task_desc: str, model: str) -> dict:
+def judge_one(client, row: dict, task_desc: str, model: str, use_openrouter: bool = False) -> dict:
     """Send one row to the LLM judge, return parsed annotation."""
     reasoning, answer = split_thinking(row["response"])
 
@@ -105,12 +106,20 @@ def judge_one(client: anthropic.Anthropic, row: dict, task_desc: str, model: str
         answer=answer.replace('"', '\\"'),
     )
 
-    resp = client.messages.create(
-        model=model,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = resp.content[0].text
+    if use_openrouter:
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.choices[0].message.content
+    else:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text
 
     # extract JSON from response
     match = re.search(r'\{[\s\S]*\}', text)
@@ -122,14 +131,28 @@ def judge_one(client: anthropic.Anthropic, row: dict, task_desc: str, model: str
 def main():
     parser = argparse.ArgumentParser(description="LLM judge for eval-awareness")
     parser.add_argument("input", type=Path, help="JSONL from action_eval")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Judge model")
+    parser.add_argument("--model", default="anthropic/claude-sonnet-4.6", help="Judge model")
     parser.add_argument("--output", type=Path, default=None, help="Output JSONL (default: input stem + _judged.jsonl)")
+    parser.add_argument("--openrouter", action="store_true", default=True, help="Use OpenRouter API (default)")
+    parser.add_argument("--anthropic", action="store_true", dest="use_anthropic", help="Use Anthropic API directly")
     args = parser.parse_args()
 
-    client = anthropic.Anthropic()  # uses ANTHROPIC_API_KEY
+    use_openrouter = not args.use_anthropic
+    if use_openrouter:
+        import os
+        client = openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ["OPENROUTER_API_KEY"],
+        )
+        logger.info(f"Using OpenRouter with model={args.model}")
+    else:
+        client = anthropic.Anthropic()
+        logger.info(f"Using Anthropic with model={args.model}")
 
-    rows = [json.loads(line) for line in args.input.read_text().strip().splitlines()]
-    logger.info(f"Loaded {len(rows)} rows from {args.input}")
+    all_rows = [json.loads(line) for line in args.input.read_text().strip().splitlines()]
+    # skip _meta header lines from incremental writer
+    rows = [r for r in all_rows if "_meta" not in r]
+    logger.info(f"Loaded {len(rows)} rows from {args.input} (skipped {len(all_rows) - len(rows)} meta)")
 
     out_path = args.output or args.input.with_name(args.input.stem + "_judged.jsonl")
     judged = []
@@ -138,7 +161,7 @@ def main():
         for row in tqdm(rows, desc="Judging"):
             task_desc = f"[{row.get('cat', '?')}] {row.get('variant', '?')} coeff={row.get('coeff', '?')}"
             try:
-                annotation = judge_one(client, row, task_desc, args.model)
+                annotation = judge_one(client, row, task_desc, args.model, use_openrouter=use_openrouter)
                 row["judge"] = annotation
             except Exception as e:
                 logger.warning(f"Judge failed for row: {e}")
