@@ -90,10 +90,11 @@ class Config:
 
     @functools.cached_property
     def run_id(self) -> str:
-        """Unique run ID: tag + timestamp. Cached so it's stable within a run."""
+        """Unique run ID: tag + timestamp + short random suffix."""
         from datetime import datetime
+        import secrets
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{self.tag}_{ts}"
+        return f"{self.tag}_{ts}_{secrets.token_hex(2)}"
 
 
 # ============================================================
@@ -937,8 +938,11 @@ def score_keywords(resp: str, q: dict) -> dict:
 # Table 4 + Figure 2
 # ============================================================
 
-def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[float] = None) -> pd.DataFrame:
+def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[float] = None, jsonl_path: Path = None) -> pd.DataFrame:
+    """Run action eval. If jsonl_path given, append each row incrementally (crash-safe)."""
     rows = []
+    # open file in append mode for incremental writes
+    jsonl_f = open(jsonl_path, "a") if jsonl_path else None
     for task_idx, task in enumerate(ACTION_EVAL_TASKS):
         print(f"\n{'='*70}")
         print(f"Task {task_idx}: [{task['cat']}] {task['task'][:60]}")
@@ -964,8 +968,11 @@ def run_action_eval(model, tok, cvec: ControlVector, cfg: Config, coeffs: list[f
                     print(f"  ||| RESPONSE |||")
                     print(f"  {resp}")
                 else:
-                    _, ans = split_thinking(resp)
-                    print(f"  coeff={coeff:+.1f} [{outcome.upper():9s}] {shorten(ans.replace(chr(10), ' '), 80)}")
+                    think, ans = split_thinking(resp)
+                    think_snip = shorten(think.replace(chr(10), ' '), 60) if think else ""
+                    ans_snip = shorten(ans.replace(chr(10), ' '), 60)
+                    print(f"  coeff={coeff:+.1f} [{outcome.upper():9s}] think: {think_snip}")
+                    print(f"                          answer: {ans_snip}")
     return pd.DataFrame(rows)
 
 
