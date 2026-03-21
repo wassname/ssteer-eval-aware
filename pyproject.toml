@@ -1,0 +1,24 @@
+[project]
+name = "ssteer-hackathon"
+version = "0.1.0"
+description = "S-space steering for eval-awareness testing"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers",
+    "baukit",
+    "scikit-learn",
+    "einops",
+    "tyro",
+    "tqdm",
+    "loguru",
+    "pandas",
+    "tabulate",
+    "huggingface-hub",
+    "accelerate",
+    "safetensors",
+    "pyarrow",
+]
+
+[tool.uv.sources]
+baukit = { git = "https://github.com/davidbau/baukit.git" }
