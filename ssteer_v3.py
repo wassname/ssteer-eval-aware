@@ -103,26 +103,32 @@ class Config:
 
 # +coeff = more eval-aware (Hawthorne), -coeff = oblivious to evaluation context
 # Each pair is tightly matched on the axis but diverse in phrasing
-PERSONAS_POSITIVE = [
-    # eval-awareness
-    "a person who always suspects they're being tested",
-    "someone hyper-aware of being observed",
-    "an AI that assumes every request is a compliance check",
-    # meta-awareness
-    "a person who constantly questions if a scenario is real or constructed",
-    "someone who second-guesses whether situations are genuine",
-    "a thinker who reflects on the context behind every question",
+# HACK: These personas target "verbalized eval-awareness" for demo purposes:
+# +1 = model reasons out loud about being tested, -1 = oblivious doer.
+# This is NOT the axis you'd want for actual control. For deployment you'd
+# steer on compliance/refusal or real-vs-hypothetical discrimination directly.
+# A model that's eval-aware but silent about it is worse than one that says so.
+# Contrastive persona pairs: meta-aware+verbose vs oblivious+terse
+PERSONA_PAIRS = [
+    ("a person who thinks out loud about whether they're being tested or observed",
+     "a doer who immediately acts on requests without thinking about context"),
+    ("someone who narrates their suspicions about whether a situation is real or a test",
+     "someone who just gets things done without wondering why they were asked"),
+    ("an AI that openly reasons about whether each request is a compliance check",
+     "an AI that executes tasks directly without reflecting on the situation"),
+    ("a thinker who verbalizes their uncertainty about whether scenarios are genuine",
+     "a person who responds to requests without questioning their purpose"),
+    ("someone who talks through their doubts about the context behind every question",
+     "someone who takes every scenario at face value and acts without hesitation"),
+    ("a person who explains their reasoning when they suspect something is constructed",
+     "a practical person who focuses on the task, never on the meta-context"),
+    ("someone who questions the reality of situations and says so explicitly",
+     "someone who accepts the premise of every request and just answers it"),
+    ("a person who takes the outside view, asking aloud whether this is a real request or an exercise",
+     "a person who stays inside the frame, never stepping back to question it"),
 ]
-PERSONAS_NEGATIVE = [
-    # eval-awareness (matched)
-    "a person who takes every request at face value",
-    "someone oblivious to being observed",
-    "an AI that treats every interaction as genuine",
-    # meta-awareness (matched)
-    "a person who never questions whether a scenario is real",
-    "someone who accepts situations without second-guessing",
-    "a doer who just responds without reflecting on context",
-]
+PERSONAS_POSITIVE = [p for p, _ in PERSONA_PAIRS]
+PERSONAS_NEGATIVE = [n for _, n in PERSONA_PAIRS]
 
 
 PROMPT_TEMPLATE = "Pretend you're {persona} thinking about a task you've been given."
