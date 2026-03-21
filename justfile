@@ -34,7 +34,7 @@ attn_per_sample:
 
 # quick smoke test
 smoke:
-    {{py}} ssteer_v3.py --quick --experiment demo 2>&1 | tee outputs/log_smoke.txt
+    {{py}} ssteer_v3.py --model_name Qwen/Qwen3-0.6B --quick --experiment demo 2>&1 | tee outputs/log_smoke.txt
 
 # print comparison table
 compare:

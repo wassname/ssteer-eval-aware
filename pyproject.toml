@@ -19,6 +19,7 @@ dependencies = [
     "safetensors",
     "pyarrow",
     "matplotlib",
+    "anthropic>=0.86.0",
 ]
 
 [tool.uv.sources]
