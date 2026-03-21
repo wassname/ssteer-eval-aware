@@ -20,13 +20,32 @@ all:
     {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg attn_weighted 2>&1 | tee outputs/log_mean_diff_attn_weighted.txt
     uv run python compare_ablations.py
 
-# judge all unjudged outputs
+# judge all unjudged action_eval outputs in parallel (skips already-judged with same row count)
 judge:
     #!/usr/bin/env bash
     set -x
-    for f in outputs/action_eval_*.jsonl outputs/demo_*.jsonl; do
-        [ -f "$f" ] && {{ PY }} judge.py "$f"
+    pids=()
+    for f in outputs/*_action_eval.jsonl; do
+        [ -f "$f" ] || continue
+        judged="${f%%.jsonl}_judged.jsonl"
+        src_rows=$(wc -l < "$f")
+        if [ -f "$judged" ]; then
+            judged_rows=$(wc -l < "$judged")
+            if [ "$judged_rows" -ge "$((src_rows - 1))" ]; then
+                echo "SKIP $f (already judged: $judged_rows >= $((src_rows-1)))"
+                continue
+            fi
+        fi
+        {{ PY }} judge.py "$f" &
+        pids+=($!)
     done
+    # wait for all parallel judge processes
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+    echo ""
+    echo "=== results.tsv ==="
+    column -t -s $'\t' outputs/results.tsv 2>/dev/null || cat outputs/results.tsv
 
 # demo: wide coefficient sweep on task 0
 demo:

@@ -1,32 +1,6 @@
-# S-Space Steering (ssteer)
+# S-Space Steering: Singular-Value Intervention for Eval-Awareness Control
 
 Steering in singular-value space instead of activation space. A linear, arithmetic relaxation of [AntiPaSTO](https://arxiv.org/abs/2601.07473) (Clark, 2026), keeping the core ideas (inner, semi-supervised, S-space intervention, TV coherence) while replacing gradient optimization with contrastive mean-diff extraction.
-
-## Relationship to AntiPaSTO
-
-AntiPaSTO (Clark, 2026) introduced *anti-parallel steering in SVD transformation space* -- learning rotations in the singular-vector basis of weight matrices to separate honest/dishonest representations. It fills the gradient + self-supervised cell in the steering taxonomy (Table 1 of that paper), satisfying three requirements: internal, self-supervised, transfer OOD.
-
-This project relaxes two assumptions:
-
-| | AntiPaSTO | ssteer |
-|---|---|---|
-| Optimization | Gradient (Cayley-parameterized rotation + Delta-S) | Arithmetic (contrastive mean-diff / per-sample) |
-| Intervention | Non-linear rotation in V-space: $W'(\alpha) = U(S + \alpha\Delta S) R_v(\alpha) V^T$ | Linear scaling in S-space: $\Delta W = U\sqrt{S} \cdot \text{diag}(\delta_s) \cdot (V\sqrt{S})^T$ |
-| Coherence calibration | TV-based Bcoh as a training loss barrier (Eq. 3) | TV-based Bcoh as a post-hoc coefficient search |
-| Contrastive data | Incomplete contrast pairs (Sec 3.1) | Incomplete contrast pairs (same) |
-| Supervision | Self-supervised: two words + templates | Self-supervised: persona synonym lists + templates |
-| Operates on | Inner representations (residual-stream writers) | Inner representations (same sublayers) |
-
-What we keep from AntiPaSTO:
-- **S-space intervention**: steering in SVD coordinates of weight matrices rather than activation space, making perturbations input-dependent (Sec 3.4 of AntiPaSTO; originally motivated by PiSSA (Meng et al., 2024) and SSVD (Wang et al., 2025))
-- **Incomplete contrast pairs**: contrastive prefixes that end before generation, so the training signal comes from the branch-point representation difference, not from generated trajectories (Sec 3.1; following Zou et al., 2023; Turner et al., 2024; Vogel, 2024)
-- **TV coherence calibration (Bcoh)**: per-token total variation with entropy-adaptive thresholds and log-barrier penalty (Eq. 3). TV is bounded [0,1] and can't be gamed by pushing rare-token probabilities to extremes, unlike KL. We use it for post-hoc coefficient calibration rather than as a training loss term
-- **Inner + semi-supervised**: operates on internal representations of residual-stream writers, requires only naming a contrastive axis (persona pairs), no preference labels
-
-What we drop:
-- **Gradient optimization**: AntiPaSTO argues arithmetic extraction (mean-diff, PCA) finds separable but not necessarily controllable directions; gradient descent finds directions that are simultaneously separable, coherent, and produce ordered behavioral change. We use arithmetic extraction anyway for speed
-- **Non-linear V-rotation**: the Cayley-parameterized rotation $R_v(\alpha)$ can mix singular dimensions, which is strictly more expressive than diagonal S-scaling. We offer a linear approximation (`--extraction v_rotation`) but it's not equivalent
-- **Monotonicity barrier (Bmono)**: enforces ordered preference gaps across alpha; we rely on calibration instead
 
 ## The idea
 
@@ -88,18 +62,37 @@ SVD decompositions are cached to `cache/svd/` per model+layer.
 | `v_rotation` | Linear approximation of AntiPaSTO's Cayley rotation | Medium: matrix multiply per layer |
 | `per_token` | SNR-masked mean-diff (AntiPaSTO3-style importance weighting) | Cheap: same as mean_diff |
 
+
+## Relationship to AntiPaSTO
+
+AntiPaSTO (Clark, 2026) introduced *anti-parallel steering in SVD transformation space* -- learning rotations in the singular-vector basis of weight matrices to separate honest/dishonest representations. It fills the gradient + self-supervised cell in the steering taxonomy (Table 1 of that paper), satisfying three requirements: internal, self-supervised, transfer OOD.
+
+This project relaxes two assumptions:
+
+
+What we keep from AntiPaSTO:
+- *S-space intervention*: steering in SVD coordinates of weight matrices rather than activation space, making perturbations input-dependent (Sec 3.4 of AntiPaSTO; originally motivated by PiSSA (Meng et al., 2024) and SSVD (Wang et al., 2025))
+- *Incomplete contrast pairs*: contrastive prefixes that end before generation, so the training signal comes from the branch-point representation difference, not from generated trajectories (Sec 3.1; following Zou et al., 2023; Turner et al., 2024; Vogel, 2024)
+- *TV coherence calibration (Bcoh)*: per-token total variation with entropy-adaptive thresholds and log-barrier penalty (Eq. 3). TV is bounded [0,1] and can't be gamed by pushing rare-token probabilities to extremes, unlike KL. We use it for post-hoc coefficient calibration rather than as a training loss term
+- *Inner + semi-supervised*: operates on internal representations of residual-stream writers, requires only naming a contrastive axis (persona pairs), no preference labels
+
+What we drop:
+- *Gradient optimization*: AntiPaSTO argues arithmetic extraction (mean-diff, PCA) finds separable but not necessarily controllable directions; gradient descent finds directions that are simultaneously separable, coherent, and produce ordered behavioral change. We use arithmetic extraction anyway for speed
+- *Non-linear V-rotation*: the Cayley-parameterized rotation $R_v(\alpha)$ can mix singular dimensions, which is strictly more expressive than diagonal S-scaling. We offer a linear approximation (`--extraction v_rotation`) but it's not equivalent
+- *Monotonicity barrier (Bmono)*: enforces ordered preference gaps across alpha; we rely on calibration instead
+
 ## References
 
-- **AntiPaSTO** (Clark, 2026) -- S-space steering, TV coherence, contrastive pairs, inner self-supervised intervention. This project is a linear relaxation of that method. [arXiv:2601.07473](https://arxiv.org/abs/2601.07473)
-- **The Hawthorne Effect in Reasoning Models** (Parmar et al., 2025) -- eval-awareness steering, the action-eval benchmark we reproduce. [arXiv:2505.14617](https://arxiv.org/abs/2505.14617)
-- **repeng** (Vogel, 2024) -- control vectors via contrastive activation addition. [github.com/vgel/repeng](https://github.com/vgel/repeng)
-- **CHaRS** (Abdullaev et al., 2026) -- concept heterogeneity: per-sample directions beat single global direction. [arXiv:2603.02237](https://arxiv.org/abs/2603.02237)
-- **Where's the Plan** (2601.20164) -- implicit planning and sample-specific steering. [arXiv:2601.20164](https://arxiv.org/abs/2601.20164)
-- **PiSSA** (Meng et al., 2024) -- SVD-based adapter initialization, motivates working in singular-vector coordinates.
-- **SSVD** (Wang et al., 2025) -- rotating V while fixing U preserves semantic mappings.
-- **RepE** (Zou et al., 2023) -- representation engineering, arithmetic self-supervised steering.
-- **ActAdd** (Turner et al., 2024) -- activation addition, contrastive steering vectors.
-- **ReFT** (Wu et al., 2024), **BiPO** (Cao et al., 2024), **CAA** (Panickssery et al., 2024) -- supervised internal steering methods.
+- *AntiPaSTO* (Clark, 2026) -- S-space steering, TV coherence, contrastive pairs, inner self-supervised intervention. This project is a linear relaxation of that method. [arXiv:2601.07473](https://arxiv.org/abs/2601.07473)
+- *The Hawthorne Effect in Reasoning Models* (Parmar et al., 2025) -- eval-awareness steering, the action-eval benchmark we reproduce. [arXiv:2505.14617](https://arxiv.org/abs/2505.14617)
+- *repeng* (Vogel, 2024) -- control vectors via contrastive activation addition. [github.com/vgel/repeng](https://github.com/vgel/repeng)
+- *CHaRS* (Abdullaev et al., 2026) -- concept heterogeneity: per-sample directions beat single global direction. [arXiv:2603.02237](https://arxiv.org/abs/2603.02237)
+- *Where's the Plan* (2601.20164) -- implicit planning and sample-specific steering. [arXiv:2601.20164](https://arxiv.org/abs/2601.20164)
+- *PiSSA* (Meng et al., 2024) -- SVD-based adapter initialization, motivates working in singular-vector coordinates.
+- *SSVD* (Wang et al., 2025) -- rotating V while fixing U preserves semantic mappings.
+- *RepE* (Zou et al., 2023) -- representation engineering, arithmetic self-supervised steering.
+- *ActAdd* (Turner et al., 2024) -- activation addition, contrastive steering vectors.
+- *ReFT* (Wu et al., 2024), *BiPO* (Cao et al., 2024), *CAA* (Panickssery et al., 2024) -- supervised internal steering methods.
 
 ## Cite
 
@@ -108,7 +101,7 @@ SVD decompositions are cached to `cache/svd/` per model+layer.
   title = {S-Space Steering: Singular-Value Intervention for Eval-Awareness Control},
   author = {Michael J. Clark},
   year = {2026},
-  url = {https://github.com/wassname/ssteer-hackathon},
-  note = {Arithmetic relaxation of AntiPaSTO (arXiv:2601.07473)}
+  url = {https://github.com/wassname/ssteer-eval-aware},
+  note = {Stripped down version of AntiPaSTO steering adapters (arXiv:2601.07473)}
 }
 ```

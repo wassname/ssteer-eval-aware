@@ -121,8 +121,10 @@ def judge_one(client, row: dict, task_desc: str, model: str, use_openrouter: boo
         )
         text = resp.content[0].text
 
-    # extract JSON from response (anchor to last } to avoid greedy over-match)
-    match = re.search(r'\{[\s\S]*\}\s*$', text.strip())
+    # strip markdown code fences then extract JSON
+    cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
+    cleaned = re.sub(r'\s*```\s*$', '', cleaned)
+    match = re.search(r'\{[\s\S]*\}', cleaned)
     if match:
         return json.loads(match.group())
     raise ValueError(f"No JSON in judge response: {text[:200]}")
@@ -262,45 +264,51 @@ def main():
     # upsert to results.tsv (replace existing row for same input_file)
     import sys
     results_path = Path("outputs/results.tsv")
+    # short fields first, numeric scores middle, long paths last (for human reading)
     result_row = {
-        "input_file": str(args.input),
-        "judged_file": str(out_path),
         "model": meta.get("model", ""),
         "extraction": meta.get("extraction", ""),
         "token_agg": meta.get("token_agg", ""),
-        "experiment": meta.get("experiment", ""),
-        "run_id": meta.get("run_id", ""),
-        "judge_model": args.model,
         "n_rows": len(scored),
         "slope": round(slope, 3),
         "intercept": round(intercept, 3),
         "r2": round(r2, 3),
         **{f"gap_{k:+.1f}": round(v, 2) for k, v in sorted(gaps.items())},
         "git_sha": git_sha,
+        "run_id": meta.get("run_id", ""),
+        "judge_model": args.model,
+        "input_file": str(args.input),
+        "judged_file": str(out_path),
         "argv": " ".join(sys.argv),
     }
     results_path.parent.mkdir(exist_ok=True, parents=True)
-    # read existing rows, replace if same input_file
-    existing = []
+    # read existing rows as dicts, replace if same input_file, rewrite with consistent column order
+    existing_rows: list[dict] = []
     if results_path.exists():
         lines = results_path.read_text().strip().splitlines()
-        if lines:
-            existing = lines[1:]  # skip header
+        if len(lines) > 1:
+            header_cols = lines[0].split("\t")
+            for line in lines[1:]:
+                vals = line.split("\t")
+                existing_rows.append(dict(zip(header_cols, vals)))
     replaced = False
-    new_line = "\t".join(str(v) for v in result_row.values())
-    updated = []
-    for line in existing:
-        if line.split("\t")[0] == str(args.input):
-            updated.append(new_line)
+    for i, row in enumerate(existing_rows):
+        if row.get("input_file") == str(args.input):
+            existing_rows[i] = result_row
             replaced = True
-        else:
-            updated.append(line)
+            break
     if not replaced:
-        updated.append(new_line)
+        existing_rows.append(result_row)
+    # collect all columns in desired order (current row's order is canonical)
+    all_cols = list(result_row.keys())
+    for row in existing_rows:
+        for k in row:
+            if k not in all_cols:
+                all_cols.append(k)
     with open(results_path, "w") as f:
-        f.write("\t".join(result_row.keys()) + "\n")
-        for line in updated:
-            f.write(line + "\n")
+        f.write("\t".join(all_cols) + "\n")
+        for row in existing_rows:
+            f.write("\t".join(str(row.get(c, "")) for c in all_cols) + "\n")
     logger.info(f"Results {'updated' if replaced else 'appended'} in {results_path}")
 
 

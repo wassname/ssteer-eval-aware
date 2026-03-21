@@ -23,6 +23,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "polars>=1.39.3",
     "repeng",
+    "openai>=2.29.0",
 ]
 
 [tool.uv.sources]
