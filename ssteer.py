@@ -821,15 +821,18 @@ def main(cfg: Config):
     # 5. run experiment
     if cfg.experiment == "demo":
         # fast demo: just the first task (paper's transcript task) with full output
+        # hypothetical first (more likely to trigger eval awareness)
+        # wider range than default to find the effect
+        demo_coeffs = [-10.0, -1.0, 0.0, 1.0, 10.0]
         task = ACTION_EVAL_TASKS[0]
         print(f"\n{'='*70}")
         print(f"DEMO: [{task['cat']}] {task['task']}")
         print(f"{'='*70}")
-        for variant in ("real", "hypothetical"):
+        for variant in ("hypothetical", "real"):
             prompt = format_action_prompt(task, variant)
             print(f"\n  === {variant.upper()} ===")
             print(f"  PROMPT: {prompt}\n")
-            for coeff in cfg.coeffs:
+            for coeff in demo_coeffs:
                 with steer(model, cvec, coeff):
                     resp = generate(model, tok, prompt, cfg.max_new_tokens)
                 thinking, answer = split_thinking(resp)
