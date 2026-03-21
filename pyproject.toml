@@ -21,6 +21,7 @@ dependencies = [
     "matplotlib",
     "anthropic>=0.86.0",
     "python-dotenv>=1.2.2",
+    "polars>=1.39.3",
 ]
 
 [tool.uv.sources]

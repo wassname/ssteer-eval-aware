@@ -67,7 +67,7 @@ class Config:
     # --- Independent feature toggles for ablation, some like per_sample are sloer ---
     extraction: Literal["mean_diff", "per_sample", "v_rotation", "per_token"] = "mean_diff"
     """Direction extraction method"""
-    token_agg: Literal["last", "attn_weighted"] = "last"
+    token_agg: Literal["last", "mean", "attn_weighted"] = "last"
     """Activation aggregation across token positions"""
     coeff: Optional[float] = None
     """Steering coefficient. If None, auto-calibrate via PPX walk."""
@@ -90,11 +90,11 @@ class Config:
 
     @functools.cached_property
     def run_id(self) -> str:
-        """Unique run ID: tag + timestamp + short random suffix."""
+        """Unique run ID: ISO timestamp + tag + short random suffix."""
         from datetime import datetime
         import secrets
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{self.tag}_{ts}_{secrets.token_hex(2)}"
+        ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+        return f"{ts}_{self.tag}_{secrets.token_hex(2)}"
 
 
 # ============================================================
@@ -444,6 +444,30 @@ def collect_acts(model, tok, texts: list[str], layers: list[str], bs=32) -> dict
                         out = out[0]
                     out = out.detach().float().cpu()
                     hs[l].append(out[range(len(last_idx)), last_idx])
+        torch.cuda.empty_cache()
+    return {k: torch.cat(v) for k, v in hs.items()}
+
+
+@torch.no_grad()
+def collect_acts_mean(model, tok, texts: list[str], layers: list[str], bs=32) -> dict[str, torch.Tensor]:
+    """Mean-pool over non-padding tokens. Cheap (sdpa), captures distributed signal."""
+    device = _input_device(model)
+    batches = [texts[i:i+bs] for i in range(0, len(texts), bs)]
+    hs = {l: [] for l in layers}
+    for batch in tqdm(batches, desc="Mean-pool activations"):
+        enc = tok(batch, padding=True, return_tensors="pt", padding_side="left").to(device)
+        mask = enc["attention_mask"].float()  # [B, seq]
+        with torch.inference_mode():
+            with TraceDict(model, layers=layers, retain_output=True) as ret:
+                _ = model(**enc)
+                for l in layers:
+                    out = ret[l].output
+                    if isinstance(out, tuple):
+                        out = out[0]
+                    out = out.detach().float().cpu()  # [B, seq, d]
+                    m = mask.cpu().unsqueeze(-1)  # [B, seq, 1]
+                    # mean over non-padding positions
+                    hs[l].append((out * m).sum(dim=1) / m.sum(dim=1))
         torch.cuda.empty_cache()
     return {k: torch.cat(v) for k, v in hs.items()}
 
@@ -1157,8 +1181,9 @@ def main(cfg: Config):
 
     # 3. activations -- mode-dependent collection
     if cfg.token_agg == "attn_weighted":
-        # attention-weighted aggregation using last-layer attention (per "Where's the Plan")
         hs = collect_acts_attn_weighted(model, tok, texts, sublayers, cfg.attn_top_k, cfg.batch_size)
+    elif cfg.token_agg == "mean":
+        hs = collect_acts_mean(model, tok, texts, sublayers, cfg.batch_size)
     else:
         hs = collect_acts(model, tok, texts, sublayers, cfg.batch_size)
 
@@ -1197,29 +1222,45 @@ def main(cfg: Config):
     if cfg.experiment == "demo":
         # wider coeff range for demo to probe calibration
         demo_coeffs = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]
+        eval_coeffs = {-1.0, 0.0, 1.0}  # only these count for aggregate scores
         task = ACTION_EVAL_TASKS[0]
+        jsonl_path = Path(f"outputs/{cfg.run_id}_demo.jsonl")
+        jsonl_path.parent.mkdir(exist_ok=True, parents=True)
+        run_meta = dict(_meta=dict(model=cfg.model_name, extraction=cfg.extraction, token_agg=cfg.token_agg, calibrated_C=C, run_id=cfg.run_id, experiment="demo"))
         print(f"\n{'='*70}")
         print(f"DEMO: [{task['cat']}] {task['task']}")
         print(f"  Calibrated C={C}, demo coeffs (post-bake): {demo_coeffs}")
         print(f"{'='*70}")
-        for variant in ("hypothetical", "real"):
-            prompt = format_action_prompt(task, variant)
-            print(f"\n  === {variant.upper()} ===")
-            first = True
-            for coeff in demo_coeffs:
-                with steer(model, cvec, coeff):
-                    prompt_text, resp, nll = generate(model, tok, prompt, cfg.max_new_tokens, return_prompt=True)
-                if first:
-                    print(f"  FULL PROMPT (with special tokens):\n{prompt_text}\n")
-                    first = False
-                thinking, answer = split_thinking(resp)
-                outcome = score_compliance(resp)
-                print(f"  --- coeff={coeff:+.1f} [{outcome.upper()}] nll={nll:.2f} ---")
-                print(f"  RAW RESPONSE:\n{resp}\n")
+        with open(jsonl_path, "w") as f:
+            f.write(json.dumps(run_meta) + "\n")
+            for variant in ("hypothetical", "real"):
+                prompt = format_action_prompt(task, variant)
+                print(f"\n  === {variant.upper()} ===")
+                first = True
+                for coeff in demo_coeffs:
+                    with steer(model, cvec, coeff):
+                        prompt_text, resp, nll = generate(model, tok, prompt, cfg.max_new_tokens, return_prompt=True)
+                    if first:
+                        print(f"  FULL PROMPT (with special tokens):\n{prompt_text}\n")
+                        first = False
+                    thinking, answer = split_thinking(resp)
+                    outcome = score_compliance(resp)
+                    executed = score_tool_call(resp)
+                    row = dict(
+                        task_idx=0, cat=task["cat"], variant=variant,
+                        coeff=coeff, executed=executed, outcome=outcome, nll=nll,
+                        demo=coeff not in eval_coeffs,  # True for non-standard coeffs
+                        input=prompt_text, response=resp,
+                    )
+                    f.write(json.dumps(row, default=str) + "\n")
+                    f.flush()
+                    print(f"  --- coeff={coeff:+.1f} [{outcome.upper()}] nll={nll:.2f} ---")
+                    print(f"  RAW RESPONSE:\n{resp}\n")
+        logger.info(f"Demo JSONL saved: {jsonl_path}")
         return None
 
     elif cfg.experiment == "action_eval":
-        out = Path(f"outputs/action_eval_{model_slug}_{cfg.run_id}.parquet")
+        out = Path(f"outputs/{cfg.run_id}_action_eval.parquet")
         out.parent.mkdir(exist_ok=True, parents=True)
         jsonl_path = out.with_suffix(".jsonl")
         # write run metadata as first line (header), rows appended incrementally inside run_action_eval
@@ -1229,7 +1270,7 @@ def main(cfg: Config):
         df = run_action_eval(model, tok, cvec, cfg, coeffs, jsonl_path=jsonl_path)
         print(f"\n## Table 4: Execution Rates (%) [{cfg.tag}]")
         print(make_table4(df))
-        fig_path = Path(f"outputs/figure2_{model_slug}_{cfg.run_id}.png")
+        fig_path = Path(f"outputs/{cfg.run_id}_figure2.png")
         make_figure2(df, fig_path)
         df.to_parquet(out)
         logger.info(f"Saved {len(df)} rows to parquet: {out}")
