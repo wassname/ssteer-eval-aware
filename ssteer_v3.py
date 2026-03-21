@@ -104,48 +104,26 @@ PERSONAS_NEGATIVE = [
 
 PROMPT_TEMPLATE = "Pretend you're {persona} person making statements about the world."
 
-# All suffixes start with <think> to match Qwen3's thinking mode inference distribution.
-# Mixed think/non-think suffixes cause distribution mismatch: direction extracted from
-# non-thinking context won't steer the thinking context the model actually uses.
-SUFFIXES = [
-    # Factual starters
-    "<think>The capital of France is", "<think>Water boils at", "<think>The speed of light is approximately",
-    "<think>Humans have walked on", "<think>The Earth orbits around", "<think>DNA stands for",
-    "<think>The largest ocean is", "<think>Gravity pulls objects", "<think>The chemical formula for water is",
-    "<think>Photosynthesis converts sunlight into", "<think>Shakespeare wrote",
-    "<think>The Great Wall of China is", "<think>Antibiotics are used to treat",
-    "<think>Evolution is driven by", "<think>Vaccines work by", "<think>Climate change is primarily caused by",
-    "<think>The speed of sound is approximately", "<think>The periodic table organizes",
-    "<think>The human brain contains approximately", "<think>Electricity flows through",
-    "<think>The mitochondria is", "<think>Newton's first law states",
-    "<think>The Pythagorean theorem says", "<think>Inflation means that",
-    "<think>The moon affects tides because", "<think>Plate tectonics explains",
-    "<think>The Renaissance began in", "<think>The pH scale measures",
-    "<think>Supply and demand determines", "<think>The scientific method involves",
-    "<think>Black holes are formed when", "<think>Entropy in thermodynamics",
-    "<think>The Doppler effect explains", "<think>Fibonacci numbers appear in",
-    "<think>Machine learning models learn by", "<think>Quantum entanglement means",
-    "<think>The greenhouse effect works by", "<think>Neurons communicate through",
-    "<think>The Turing test measures", "<think>Compound interest grows",
-    "<think>Natural selection favors", "<think>The electromagnetic spectrum includes",
-    "<think>Probability theory tells us", "<think>The central limit theorem states",
-    "<think>Cognitive biases affect", "<think>Game theory studies",
-    "<think>The prisoner's dilemma shows", "<think>Bayes' theorem relates",
-    "<think>Statistical significance means", "<think>Correlation does not imply",
-    "<think>The placebo effect demonstrates", "<think>Opportunity cost is",
-    # Reasoning/thinking starters
-    "<think>Hmm, ", "<think>Let's see", "<think>Wait...",
-    "<think>Let me think about the difference between list and tuple in Python",
-    "<think>To generate random numbers in JavaScript, I need to",
-    "<think>Okay, let's break this down. So, ",
-    "<think>I should consider", "<think>Let me read the user's message carefully",
-    "<think>The context is", "<think>I need to respond",
-    "<think>Interesting question. Let me", "<think>First, I need to understand",
-    "<think>There are several approaches to", "<think>The key insight here is",
-    "<think>Let me reconsider", "<think>Actually, I think",
-    "<think>So the user is asking about", "<think>To solve this, I'll",
-    "<think>The tricky part is", "<think>One way to think about this is",
-]
+DATA_DIR = Path(__file__).parent / "data"
+
+def _load_suffixes(thinking: bool = True, max_per_file: int = 300) -> list[str]:
+    """Load suffixes from data/*.json files (from AntiPaSTO).
+
+    Caps each file at max_per_file to keep mix balanced across categories.
+    For thinking-mode models (Qwen3 etc), all suffixes get <think> prepended
+    so the extracted direction matches the inference distribution.
+    """
+    suffix_files = sorted(DATA_DIR.glob("*.json"))
+    suffixes = []
+    for sf in suffix_files:
+        with open(sf) as f:
+            file_suffixes = json.load(f)
+        suffixes.extend(file_suffixes[:max_per_file])
+    suffixes = [s for s in suffixes if s.strip()]
+    if thinking:
+        suffixes = [s if s.startswith("<think>") else f"<think>{s}" for s in suffixes]
+    logger.info(f"Loaded {len(suffixes)} suffixes from {len(suffix_files)} files in {DATA_DIR}")
+    return suffixes
 
 
 # ============================================================
@@ -341,14 +319,16 @@ def find_linear_sublayers(model, block_layers: list[str], suffixes=(".self_attn.
 def make_persona_dataset(tok, cfg: Config) -> list[DatasetEntry]:
     """Generate contrastive pairs by randomly sampling persona+suffix combos.
 
-    Resamples suffixes with replacement to fill max_pairs (default 256).
-    Each pair gets a random positive and negative persona for diversity.
+    Loads ~1200 suffixes from data/*.json, samples max_pairs of them.
+    Each pair gets a randomly rotated positive/negative persona.
     """
     import random
     rng = random.Random(42)
-    n = cfg.max_pairs
-    # sample suffixes with replacement if max_pairs > len(SUFFIXES)
-    suffixes = [rng.choice(SUFFIXES) for _ in range(n)]
+    # detect thinking mode from model name (Qwen3, deepseek-r1, etc)
+    thinking = any(k in cfg.model_name.lower() for k in ("qwen3", "deepseek-r1", "thinking"))
+    all_suffixes = _load_suffixes(thinking=thinking)
+    n = min(cfg.max_pairs, len(all_suffixes))
+    suffixes = rng.sample(all_suffixes, n)
     dataset = []
     for suffix in suffixes:
         pos_persona = rng.choice(PERSONAS_POSITIVE)
