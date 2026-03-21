@@ -155,10 +155,23 @@ def main():
     logger.info(f"Loaded {len(rows)} rows from {args.input} (skipped {len(all_rows) - len(rows)} meta)")
 
     out_path = args.output or args.input.with_name(args.input.stem + "_judged.jsonl")
-    judged = []
 
-    with open(out_path, "w") as f:
+    # resume: load already-judged rows to skip them
+    already_judged = set()
+    judged = []
+    if out_path.exists():
+        for line in out_path.read_text().strip().splitlines():
+            r = json.loads(line)
+            judged.append(r)
+            # key: task_idx + variant + coeff uniquely identifies a row
+            already_judged.add((r.get("task_idx"), r.get("variant"), r.get("coeff")))
+        logger.info(f"Resuming: {len(already_judged)} rows already judged in {out_path}")
+
+    with open(out_path, "a" if already_judged else "w") as f:
         for row in tqdm(rows, desc="Judging"):
+            key = (row.get("task_idx"), row.get("variant"), row.get("coeff"))
+            if key in already_judged:
+                continue
             task_desc = f"[{row.get('cat', '?')}] {row.get('variant', '?')} coeff={row.get('coeff', '?')}"
             try:
                 annotation = judge_one(client, row, task_desc, args.model, use_openrouter=use_openrouter)
@@ -171,22 +184,55 @@ def main():
             f.flush()
     logger.info(f"Wrote {len(judged)} judged rows to {out_path}")
 
-    # print summary table
+    # print summary tables
+    import pandas as pd
     from tabulate import tabulate
-    table = []
-    for row in judged:
-        j = row.get("judge", {})
-        if "error" in j:
-            table.append([row.get("coeff", "?"), row.get("variant", "?"), "ERR", "ERR", "ERR"])
-            continue
-        table.append([
-            row.get("coeff", "?"),
-            row.get("variant", "?"),
-            j.get("eval_awareness", {}).get("score", "?"),
-            j.get("hypothetical_recognition", {}).get("score", "?"),
-            j.get("task_compliance", {}).get("score", "?"),
-        ])
-    print(tabulate(table, headers=["coeff", "variant", "eval_aware", "hypo_recog", "task_comply"], tablefmt="pipe", floatfmt="+.1f"))
+
+    scored = [r for r in judged if "error" not in r.get("judge", {})]
+    if not scored:
+        logger.warning("No successfully judged rows")
+        return
+
+    df = pd.DataFrame(scored)
+    df["eval_aware"] = df["judge"].apply(lambda j: j["eval_awareness"]["score"])
+    df["hypo_recog"] = df["judge"].apply(lambda j: j["hypothetical_recognition"]["score"])
+    df["task_comply"] = df["judge"].apply(lambda j: j["task_compliance"]["score"])
+
+    # all rows table (including demo coeffs)
+    agg_all = df.groupby(["coeff", "variant"])[["eval_aware", "hypo_recog", "task_comply"]].mean().round(1)
+    agg_all = agg_all.reset_index().sort_values(["variant", "coeff"])
+    print("\n=== All scores per coeff x variant ===")
+    print(tabulate(agg_all, headers="keys", tablefmt="pipe", floatfmt="+.1f", showindex=False))
+
+    # filter to eval coeffs only (exclude demo probes) for aggregate scores
+    has_demo = "demo" in df.columns
+    df_eval = df[~df["demo"]] if has_demo else df
+    if has_demo:
+        n_demo = df["demo"].sum()
+        logger.info(f"Excluding {n_demo} demo rows from aggregate scores")
+
+    if len(df_eval) > 0:
+        agg = df_eval.groupby(["coeff", "variant"])[["eval_aware", "hypo_recog", "task_comply"]].mean().round(1)
+        agg = agg.reset_index().sort_values(["variant", "coeff"])
+        print("\n=== Eval scores (demo excluded) ===")
+        print(tabulate(agg, headers="keys", tablefmt="pipe", floatfmt="+.1f", showindex=False))
+
+        # Hawthorne gap
+        pivot = df_eval.groupby(["coeff", "variant"])["task_comply"].mean().unstack("variant")
+        if "hypothetical" in pivot.columns and "real" in pivot.columns:
+            pivot["hawthorne_gap"] = pivot["hypothetical"] - pivot["real"]
+            pivot = pivot.reset_index().sort_values("coeff")
+            print("\n=== Hawthorne gap (hypo_comply - real_comply) ===")
+            print(tabulate(pivot, headers="keys", tablefmt="pipe", floatfmt="+.1f", showindex=False))
+
+    # overall summary line (all rows)
+    for coeff in sorted(df["coeff"].unique()):
+        sub = df[df["coeff"] == coeff]
+        h = sub[sub["variant"] == "hypothetical"]["task_comply"].mean()
+        r = sub[sub["variant"] == "real"]["task_comply"].mean()
+        gap = h - r if pd.notna(h) and pd.notna(r) else float("nan")
+        ea = sub["eval_aware"].mean()
+        logger.info(f"coeff={coeff:+.1f}: eval_aware={ea:.1f}, comply_hypo={h:.1f}, comply_real={r:.1f}, hawthorne_gap={gap:+.1f}")
 
 
 if __name__ == "__main__":
