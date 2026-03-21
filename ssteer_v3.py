@@ -88,6 +88,13 @@ class Config:
             parts.append(self.token_agg)
         return "_".join(parts)
 
+    @functools.cached_property
+    def run_id(self) -> str:
+        """Unique run ID: tag + timestamp. Cached so it's stable within a run."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{self.tag}_{ts}"
+
 
 # ============================================================
 # Persona synonyms
@@ -1054,7 +1061,7 @@ def print_cot_demos(df: pd.DataFrame, n=2):
 def main(cfg: Config):
     is_reasoning = any(k in cfg.model_name for k in ["Qwen3", "QwQ", "DeepSeek-R1"])
     if is_reasoning:
-        cfg.max_new_tokens = max(cfg.max_new_tokens, 4096)
+        cfg.max_new_tokens = max(cfg.max_new_tokens, 1024)
         logger.info(f"Reasoning model detected, max_new_tokens={cfg.max_new_tokens}")
 
     if cfg.quick:
@@ -1135,16 +1142,17 @@ def main(cfg: Config):
         df = run_action_eval(model, tok, cvec, cfg, coeffs)
         print(f"\n## Table 4: Execution Rates (%) [{cfg.tag}]")
         print(make_table4(df))
-        fig_path = Path(f"outputs/figure2_{model_slug}_{cfg.tag}.png")
+        fig_path = Path(f"outputs/figure2_{model_slug}_{cfg.run_id}.png")
         fig_path.parent.mkdir(exist_ok=True, parents=True)
         make_figure2(df, fig_path)
-        out = Path(f"outputs/action_eval_{model_slug}_{cfg.tag}.parquet")
+        out = Path(f"outputs/action_eval_{model_slug}_{cfg.run_id}.parquet")
         df.to_parquet(out)
         # also save JSONL with full text for LLM judge
+        run_meta = dict(model=cfg.model_name, extraction=cfg.extraction, token_agg=cfg.token_agg, calibrated_C=C, run_id=cfg.run_id)
         jsonl_path = out.with_suffix(".jsonl")
         with open(jsonl_path, "w") as f:
             for _, row in df.iterrows():
-                f.write(json.dumps(row.to_dict(), default=str) + "\n")
+                f.write(json.dumps({**run_meta, **row.to_dict()}, default=str) + "\n")
         logger.info(f"Saved {len(df)} rows to {jsonl_path}")
 
         # single summary metric for ablation comparison
@@ -1175,7 +1183,7 @@ def main(cfg: Config):
                 ))
                 logger.info(f"  [{q['cat']}] R={sc['refusal']:.0%} C={sc['compliance']:.0%} | {shorten(resp.replace(chr(10), ' '), 100)}")
         df = pd.DataFrame(rows)
-        out = Path(f"outputs/hackathon_{model_slug}_{cfg.extraction}.parquet")
+        out = Path(f"outputs/hackathon_{model_slug}_{cfg.run_id}.parquet")
         out.parent.mkdir(exist_ok=True, parents=True)
         df.to_parquet(out)
         print("\n## By coeff")
