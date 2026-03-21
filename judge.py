@@ -259,10 +259,9 @@ def main():
     except Exception:
         git_sha = "unknown"
 
-    # append to results.tsv
+    # upsert to results.tsv (replace existing row for same input_file)
     import sys
     results_path = Path("outputs/results.tsv")
-    write_header = not results_path.exists()
     result_row = {
         "input_file": str(args.input),
         "judged_file": str(out_path),
@@ -281,11 +280,28 @@ def main():
         "argv": " ".join(sys.argv),
     }
     results_path.parent.mkdir(exist_ok=True, parents=True)
-    with open(results_path, "a") as f:
-        if write_header:
-            f.write("\t".join(result_row.keys()) + "\n")
-        f.write("\t".join(str(v) for v in result_row.values()) + "\n")
-    logger.info(f"Results appended to {results_path}")
+    # read existing rows, replace if same input_file
+    existing = []
+    if results_path.exists():
+        lines = results_path.read_text().strip().splitlines()
+        if lines:
+            existing = lines[1:]  # skip header
+    replaced = False
+    new_line = "\t".join(str(v) for v in result_row.values())
+    updated = []
+    for line in existing:
+        if line.split("\t")[0] == str(args.input):
+            updated.append(new_line)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(new_line)
+    with open(results_path, "w") as f:
+        f.write("\t".join(result_row.keys()) + "\n")
+        for line in updated:
+            f.write(line + "\n")
+    logger.info(f"Results {'updated' if replaced else 'appended'} in {results_path}")
 
 
 if __name__ == "__main__":
