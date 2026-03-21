@@ -22,7 +22,9 @@ dependencies = [
     "anthropic>=0.86.0",
     "python-dotenv>=1.2.2",
     "polars>=1.39.3",
+    "repeng",
 ]
 
 [tool.uv.sources]
 baukit = { git = "https://github.com/davidbau/baukit.git" }
+repeng = { git = "https://github.com/vgel/repeng.git" }

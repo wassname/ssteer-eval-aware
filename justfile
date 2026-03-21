@@ -36,6 +36,13 @@ demo:
 smoke:
     {{ PY }} ssteer_v3.py --model_name Qwen/Qwen3-0.6B --quick --experiment demo 2>&1 | tee outputs/log_smoke.txt
 
+# activation-steering baseline (repeng)
+asteer:
+    {{ PY }} asteer.py --model_name {{ MODEL }} 2>&1 | tee outputs/log_asteer.txt
+
+asteer-smoke:
+    {{ PY }} asteer.py --model_name Qwen/Qwen3-0.6B --quick --experiment demo 2>&1 | tee outputs/log_asteer_smoke.txt
+
 # print comparison table
 compare:
     @uv run python compare_ablations.py
