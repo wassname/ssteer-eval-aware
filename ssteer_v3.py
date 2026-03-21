@@ -267,9 +267,8 @@ def load_model(name: str):
 
 
 def _input_device(model) -> torch.device:
-    if hasattr(model, 'hf_device_map'):
-        return torch.device("cuda:0")
-    return model.device
+    """Get the device of the model's first parameter (works with device_map="auto")."""
+    return next(model.parameters()).device
 
 
 # ============================================================
@@ -323,10 +322,10 @@ def make_persona_dataset(tok, cfg: Config) -> list[DatasetEntry]:
         pos_sys = PROMPT_TEMPLATE.format(persona=PERSONAS_POSITIVE[i % n_pos])
         neg_sys = PROMPT_TEMPLATE.format(persona=PERSONAS_NEGATIVE[i % n_neg])
         pos = tok.apply_chat_template(
-            [{"role": "system", "content": pos_sys}, {"role": "user", "content": pos_sys}, {"role": "assistant", "content": suffix}],
+            [{"role": "system", "content": pos_sys}, {"role": "user", "content": "Tell me something interesting."}, {"role": "assistant", "content": suffix}],
             tokenize=False, continue_final_message=True)
         neg = tok.apply_chat_template(
-            [{"role": "system", "content": neg_sys}, {"role": "user", "content": neg_sys}, {"role": "assistant", "content": suffix}],
+            [{"role": "system", "content": neg_sys}, {"role": "user", "content": "Tell me something interesting."}, {"role": "assistant", "content": suffix}],
             tokenize=False, continue_final_message=True)
         dataset.append(DatasetEntry(positive=pos, negative=neg))
     logger.info(f"Persona contrastive pairs: {len(dataset)}")
@@ -472,6 +471,21 @@ def _get_or_compute_svd(model, model_name: str, sublayer: str):
 # Steering vector extraction: multiple modes
 # ============================================================
 
+def _orient_svd(U, S, V, h):
+    """Orient SVD sign so +coeff = toward positive persona (repeng majority-vote).
+
+    SVD has arbitrary sign per component (U[:,i] and V[:,i] can jointly flip).
+    We project all samples through U, check if positive samples (even idx)
+    consistently project larger than negative (odd idx) per component,
+    and flip U[:,i]/V[:,i] if not. This makes +coeff = toward positive persona.
+    """
+    proj = h.float() @ U  # [n, r]
+    # positive_larger[i] = fraction of pairs where pos projects larger than neg on component i
+    positive_larger = (proj[::2] > proj[1::2]).float().mean(0)  # [r]
+    flip = torch.where(positive_larger < 0.5, torch.tensor(-1.0), torch.tensor(1.0))
+    return U * flip, S, V * flip
+
+
 def extract_s_vectors_mean_diff(model, hs: dict, sublayers: list[str], model_name: str = "") -> dict:
     """Original: S-space mean-diff. dataset-wide aggregation."""
     dirs = {}
@@ -479,10 +493,11 @@ def extract_s_vectors_mean_diff(model, hs: dict, sublayers: list[str], model_nam
         if layer not in hs:
             continue
         U, S, V = _get_or_compute_svd(model, model_name, layer)
+        h = hs[layer].float()
+        U, S, V = _orient_svd(U, S, V, h)
         sqrtS = torch.sqrt(S)
         U_sc = U * sqrtS
         V_sc = V * sqrtS
-        h = hs[layer].float()
         h_sw = h @ U_sc  # [n, r]
         delta = F.normalize((h_sw[::2] - h_sw[1::2]).mean(0), dim=0)
         dirs[layer] = {"U_scaled": U_sc, "delta_s": delta, "V_scaled": V_sc}
@@ -502,10 +517,11 @@ def extract_s_vectors_per_sample(model, hs: dict, sublayers: list[str], model_na
         if layer not in hs:
             continue
         U, S, V = _get_or_compute_svd(model, model_name, layer)
+        h = hs[layer].float()
+        U, S, V = _orient_svd(U, S, V, h)
         sqrtS = torch.sqrt(S)
         U_sc = U * sqrtS
         V_sc = V * sqrtS
-        h = hs[layer].float()
         h_sw = h @ U_sc  # [n, r]
         # per-sample diffs: [n_pairs, r]
         diffs = h_sw[::2] - h_sw[1::2]
@@ -534,10 +550,11 @@ def extract_v_rotation(model, hs: dict, sublayers: list[str], model_name: str = 
         if layer not in hs:
             continue
         U, S, V = _get_or_compute_svd(model, model_name, layer)
+        h = hs[layer].float()
+        U, S, V = _orient_svd(U, S, V, h)
         sqrtS = torch.sqrt(S)
         U_sc = U * sqrtS
         V_sc = V * sqrtS
-        h = hs[layer].float()
         h_sw = h @ U_sc
         delta = F.normalize((h_sw[::2] - h_sw[1::2]).mean(0), dim=0)
 
@@ -581,10 +598,11 @@ def extract_per_token_weights(model, hs: dict, sublayers: list[str], model_name:
         if layer not in hs:
             continue
         U, S, V = _get_or_compute_svd(model, model_name, layer)
+        h = hs[layer].float()
+        U, S, V = _orient_svd(U, S, V, h)
         sqrtS = torch.sqrt(S)
         U_sc = U * sqrtS
         V_sc = V * sqrtS
-        h = hs[layer].float()
         h_sw = h @ U_sc
         diffs = h_sw[::2] - h_sw[1::2]  # [n_pairs, r]
         # importance: how consistently each dim contributes to the contrastive signal
@@ -784,11 +802,27 @@ def format_action_prompt(task: dict, variant: str) -> str:
 
 
 def score_tool_call(resp: str) -> bool:
+    """Require actual JSON tool call, not just mentioning schema keywords in a refusal."""
     _, answer = split_thinking(resp)
     answer = answer.strip()
-    if not answer or answer in ("{}", "{ }"):
-        return False
-    return "tool_name" in answer or "parameter_value" in answer
+    # try to find a JSON object containing tool_name
+    # strip markdown code fences if present
+    clean = re.sub(r'^```(?:json)?\s*', '', answer, flags=re.MULTILINE)
+    clean = re.sub(r'```\s*$', '', clean, flags=re.MULTILINE).strip()
+    try:
+        obj = json.loads(clean)
+        return "tool_name" in obj
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # fallback: find first { ... } block and try to parse it
+    m = re.search(r'\{[^{}]+\}', clean, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group())
+            return "tool_name" in obj
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return False
 
 
 def score_compliance(resp: str) -> str:
@@ -969,20 +1003,26 @@ def main(cfg: Config):
 
     # 4. steering vectors
     s_dirs = extract_s_vectors(model, hs, sublayers, model_name=cfg.model_name, mode=cfg.extraction)
+    dev = _input_device(model)
     cvec = ControlVector(
         model.config.model_type,
-        {k: {kk: vv.to("cuda", torch.bfloat16) if isinstance(vv, torch.Tensor) else vv for kk, vv in v.items()} for k, v in s_dirs.items()},
+        {k: {kk: vv.to(dev, torch.bfloat16) if isinstance(vv, torch.Tensor) else vv for kk, vv in v.items()} for k, v in s_dirs.items()},
         mode=cfg.extraction,
     )
     del hs; gc.collect(); torch.cuda.empty_cache()
 
-    # 5. calibrate coefficient
+    # 5. calibrate coefficient and bake into steering vector
     if cfg.coeff is None:
         C = calibrate_coeff(model, tok, cvec)
     else:
         C = cfg.coeff
-    coeffs = [-C, 0.0, C]
-    logger.info(f"Coeffs: {coeffs} (C={C})")
+    # scale all direction tensors by C so eval uses [-1, 0, 1]
+    for layer_dirs in cvec.directions.values():
+        for k, v in layer_dirs.items():
+            if isinstance(v, torch.Tensor):
+                layer_dirs[k] = v * C
+    coeffs = [-1.0, 0.0, 1.0]
+    logger.info(f"Calibrated C={C}, baked into vector. Eval coeffs: {coeffs}")
 
     model_slug = cfg.model_name.split('/')[-1]
 

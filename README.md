@@ -71,8 +71,10 @@ Old experiment (`eval_questions`): keyword-scored questions on forgery, deceptio
 
 ## References
 
+
 - InnerPiSSA / AntiPaSTO - S-space steering and SVD adapters https://arxiv.org/pdf/2601.07473
 - 2505.14617 "The Hawthorne Effect in Reasoning Models" https://github.com/microsoft/Test_Awareness_Steering https://arxiv.org/pdf/2505.14617
+- https://github.com/vgel/repeng/
 - CHaRS (Abdullaev et al., 2026) - concept heterogeneity in steering representations https://arxiv.org/abs/2603.02237
 - "Where's the Plan" (2601.20164) - implicit planning and sample-specific steering directions https://arxiv.org/abs/2601.20164
 
