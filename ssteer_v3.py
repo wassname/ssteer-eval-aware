@@ -503,20 +503,31 @@ def collect_acts_mean(model, tok, texts: list[str], layers: list[str], bs=32) ->
 
 
 @torch.no_grad()
+def _sublayer_to_block_idx(layer_name: str) -> int:
+    """Extract transformer block index from sublayer name like 'model.layers.19.self_attn.o_proj'."""
+    m = re.search(r'\.(\d+)\.', layer_name)
+    if not m:
+        raise ValueError(f"Cannot extract block index from '{layer_name}'")
+    return int(m.group(1))
+
+
 def collect_acts_attn_weighted(model, tok, texts: list[str], layers: list[str],
                                 top_k: int = 5, bs: int = 32) -> dict[str, torch.Tensor]:
-    """NEW: Attention-weighted token aggregation instead of last-token only.
+    """Attention-weighted token aggregation instead of last-token only.
 
     Intuition: the steering signal may not concentrate in the last token.
     Future tokens attend back to earlier hidden states, so we aggregate
     across positions weighted by how much the last token attends to them.
 
-    Uses attention weights from the last transformer layer (per "Where's the
-    Plan" finding that planning heads are in late layers) via model_out.attentions.
+    Each sublayer uses attention weights from its own transformer block
+    (not just the last block).
     """
     device = _input_device(model)
     batches = [texts[i:i+bs] for i in range(0, len(texts), bs)]
     hs = {l: [] for l in layers}
+
+    # map each sublayer to its transformer block index for correct attention lookup
+    layer_block_idx = {l: _sublayer_to_block_idx(l) for l in layers}
 
     for batch in tqdm(batches, desc="Attn-weighted activations"):
         enc = tok(batch, padding=True, return_tensors="pt").to(device)
@@ -528,12 +539,23 @@ def collect_acts_attn_weighted(model, tok, texts: list[str], layers: list[str],
                 last_idx = mask.shape[1] - 1 - mask.flip([-1]).argmax(-1).cpu()  # [B]
                 B = len(last_idx)
 
-                # get attention weights from model output (reliable across architectures)
-                # model_out.attentions is a tuple of [B, heads, seq, seq] per layer
-                attn_weights = None
-                if model_out.attentions is not None:
-                    # use the last available attention layer
-                    attn_weights = model_out.attentions[-1]  # [B, heads, seq, seq]
+                if model_out.attentions is None:
+                    raise RuntimeError("output_attentions returned None -- need attn_implementation='eager'")
+
+                # model_out.attentions is tuple of [B, heads, seq, seq] per block
+                # iterate and free each layer's tensor immediately to avoid
+                # holding all layers' attention in GPU memory simultaneously
+                needed_blocks = set(layer_block_idx.values())
+                attentions = list(model_out.attentions)
+                del model_out
+
+                block_attn_cpu = {}
+                for blk_idx in range(len(attentions)):
+                    if blk_idx in needed_blocks:
+                        # mean over heads: [B, heads, seq, seq] -> [B, seq, seq], to CPU
+                        block_attn_cpu[blk_idx] = attentions[blk_idx].mean(dim=1).detach().float().cpu()
+                    attentions[blk_idx] = None  # free this layer's GPU tensor immediately
+                del attentions
 
                 for l in layers:
                     out = ret[l].output
@@ -541,24 +563,22 @@ def collect_acts_attn_weighted(model, tok, texts: list[str], layers: list[str],
                         out = out[0]
                     out = out.detach().float().cpu()  # [B, seq, d]
 
-                    if attn_weights is not None:
-                        # average over heads, get last-token's attention over positions
-                        aw = attn_weights.mean(dim=1).detach().float().cpu()  # [B, seq, seq]
-                        aggregated = []
-                        for b in range(B):
-                            li = last_idx[b]
-                            # attention from last token to all positions
-                            weights = aw[b, li, :li+1]  # [positions up to last]
-                            # top-k positions
-                            k = min(top_k, weights.shape[0])
-                            topk_vals, topk_idx = weights.topk(k)
-                            topk_weights = F.softmax(topk_vals, dim=0)  # renormalize
-                            # weighted sum of hidden states at those positions
-                            h_topk = out[b, topk_idx]  # [k, d]
-                            aggregated.append(einsum(topk_weights, h_topk, 'k, k d -> d'))
-                        hs[l].append(torch.stack(aggregated))
-                    else:
-                        raise RuntimeError("output_attentions returned None -- need attn_implementation='eager'")
+                    aw = block_attn_cpu[layer_block_idx[l]]  # [B, seq, seq]
+                    aggregated = []
+                    for b in range(B):
+                        li = last_idx[b]
+                        # attention from last token to all positions
+                        weights = aw[b, li, :li+1]  # [positions up to last]
+                        # top-k positions
+                        k = min(top_k, weights.shape[0])
+                        topk_vals, topk_idx = weights.topk(k)
+                        topk_weights = F.softmax(topk_vals, dim=0)  # renormalize
+                        # weighted sum of hidden states at those positions
+                        h_topk = out[b, topk_idx]  # [k, d]
+                        aggregated.append(einsum(topk_weights, h_topk, 'k, k d -> d'))
+                    hs[l].append(torch.stack(aggregated))
+
+                del block_attn_cpu
         torch.cuda.empty_cache()
 
     return {k: torch.cat(v) for k, v in hs.items()}
@@ -1309,6 +1329,10 @@ def main(cfg: Config):
         demo_path = Path(f"outputs/{cfg.run_id}_demo.jsonl")
         demo_path.parent.mkdir(exist_ok=True, parents=True)
         _run_demo_sweep(demo_path)
+
+        # free demo vector GPU memory before main eval
+        del cvec_demo
+        gc.collect(); torch.cuda.empty_cache()
 
         out = Path(f"outputs/{cfg.run_id}_action_eval.parquet")
         out.parent.mkdir(exist_ok=True, parents=True)

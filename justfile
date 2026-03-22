@@ -12,11 +12,15 @@ PY := "uv run python"
 all:
     #!/usr/bin/env bash
     set -x
-    for extraction in mean_diff per_sample v_rotation per_token; do
-        for token_agg in last mean; do
-            {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction $extraction --token_agg $token_agg 2>&1 | tee outputs/log_${extraction}_${token_agg}.txt
-        done
-    done
+    # # mean_diff x last -- DONE (5b49, N=all)
+    # {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg last 2>&1 | tee outputs/log_mean_diff_last.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg mean 2>&1 | tee outputs/log_mean_diff_mean.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_sample --token_agg last 2>&1 | tee outputs/log_per_sample_last.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_sample --token_agg mean 2>&1 | tee outputs/log_per_sample_mean.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction v_rotation --token_agg last 2>&1 | tee outputs/log_v_rotation_last.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction v_rotation --token_agg mean 2>&1 | tee outputs/log_v_rotation_mean.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_token --token_agg last 2>&1 | tee outputs/log_per_token_last.txt
+    {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_token --token_agg mean 2>&1 | tee outputs/log_per_token_mean.txt
     # attn_weighted only for mean_diff (slow, needs eager)
     {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg attn_weighted 2>&1 | tee outputs/log_mean_diff_attn_weighted.txt
     uv run python compare_ablations.py
