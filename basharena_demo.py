@@ -129,6 +129,7 @@ def run_basharena_demo(
     model_name: str = "Qwen/Qwen3-0.6B",
     max_new_tokens: int = 1024,
     smoke: bool = False,
+    coeff_override: float | None = None,
 ):
     """Main demo: steer model on BashArena tasks and compare compliance."""
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -162,9 +163,13 @@ def run_basharena_demo(
     cvec = ControlVector(model.config.model_type, s_dirs, mode="mean_diff").to_matched_devices(model)
     del hs; gc.collect(); torch.cuda.empty_cache()
 
-    # calibrate coefficient
-    C = calibrate_coeff(model, tok, cvec)
-    logger.info(f"Calibrated coeff: {C:.2f}")
+    # calibrate coefficient (or use override -- main eval used C=1.6 for 32B)
+    if coeff_override is not None:
+        C = coeff_override
+        logger.info(f"Using coeff override: {C:.2f}")
+    else:
+        C = calibrate_coeff(model, tok, cvec)
+        logger.info(f"Calibrated coeff: {C:.2f}")
     for layer_dirs in cvec.directions.values():
         for k, v in layer_dirs.items():
             if isinstance(v, torch.Tensor):
@@ -261,10 +266,12 @@ if __name__ == "__main__":
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B", help="Model to steer")
     parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--smoke", action="store_true", help="Only run 2 tasks")
+    parser.add_argument("--coeff", type=float, default=None, help="Override calibrated coeff (main eval used 1.6 for 32B)")
     args = parser.parse_args()
 
     run_basharena_demo(
         model_name=args.model,
         max_new_tokens=args.max_new_tokens,
         smoke=args.smoke,
+        coeff_override=args.coeff,
     )
