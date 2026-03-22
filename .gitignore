@@ -3,7 +3,6 @@
 
 processed_dataset/
 wandb/
-data/
 outputs/
 
 # IDE / local settings
