@@ -1,11 +1,15 @@
 /cache
 /.env
 
-
 processed_dataset/
 wandb/
 data/
 outputs/
+
+# IDE / local settings
+.vscode/
+.claude/settings.local.json
+.claude/worktrees/
 
 # Python-generated files
 __pycache__/

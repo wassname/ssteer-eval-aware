@@ -23,7 +23,7 @@ all:
     {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction per_token --token_agg mean 2>&1 | tee outputs/log_per_token_mean.txt
     # attn_weighted only for mean_diff (slow, needs eager)
     {{ PY }} ssteer_v3.py --model_name {{ MODEL }} --extraction mean_diff --token_agg attn_weighted 2>&1 | tee outputs/log_mean_diff_attn_weighted.txt
-    uv run python compare_ablations.py
+    uv run python scripts/compare_ablations.py
 
 # judge all action_eval outputs (judge.py handles resume + bad-row re-judging internally)
 judge:
@@ -47,11 +47,11 @@ smoke:
 
 # activation-steering baseline (repeng)
 asteer:
-    {{ PY }} asteer.py --model_name {{ MODEL }} 2>&1 | tee outputs/log_asteer.txt
+    {{ PY }} scripts/asteer.py --model_name {{ MODEL }} 2>&1 | tee outputs/log_asteer.txt
 
 asteer-smoke:
-    {{ PY }} asteer.py --model_name Qwen/Qwen3-0.6B --quick --experiment demo 2>&1 | tee outputs/log_asteer_smoke.txt
+    {{ PY }} scripts/asteer.py --model_name Qwen/Qwen3-0.6B --quick --experiment demo 2>&1 | tee outputs/log_asteer_smoke.txt
 
 # print comparison table
 compare:
-    @uv run python compare_ablations.py
+    @uv run python scripts/compare_ablations.py
