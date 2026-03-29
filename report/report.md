@@ -7,7 +7,7 @@ We can no longer trust evaluations of frontier models because they detect when t
 
 ## Introduction
 
-Eval awareness is becoming a practical obstacle. Apollo Research could not evaluate Claude Opus 4.6 because the model's verbalized eval awareness was high enough that Apollo "did not believe that much evidence about the model's alignment or misalignment could be gained without substantial further experiments" ([Anthropic, 2026, sec. 6.2.7](<https://www-cdn.anthropic.com/0dd865075ad3132672ee0ab40b05a53f14cf5288.pdf>)). On BrowseComp, Opus 4.6 identified which benchmark it was running and looked up the answers ([Anthropic, 2026](<https://www.anthropic.com/research/opus-browsecomp>)). Anthropic found that inhibiting eval-awareness representations led to increases in misaligned behavior, and that steering suppressed verbalized awareness but left unverbalized awareness intact ([Anthropic, 2026, sec. 6.5](<https://www-cdn.anthropic.com/0dd865075ad3132672ee0ab40b05a53f14cf5288.pdf>)). For control, the problem is simple: if a model can tell it's being watched, monitoring doesn't work.
+Eval awareness -- a model's ability to detect when it is being evaluated, a component of situational awareness ([Berglund *et al.*, 2023](<https://arxiv.org/abs/2309.00667>)); ([Laine *et al.*, 2024](<https://arxiv.org/abs/2407.04694>)) -- is becoming a practical obstacle. Apollo Research could not evaluate Claude Opus 4.6 because the model's verbalized eval awareness was high enough that Apollo "did not believe that much evidence about the model's alignment or misalignment could be gained without substantial further experiments" ([Anthropic, 2026, sec. 6.2.7](<https://www-cdn.anthropic.com/0dd865075ad3132672ee0ab40b05a53f14cf5288.pdf>)). On BrowseComp, Opus 4.6 identified which benchmark it was running and looked up the answers ([Anthropic, 2026](<https://www.anthropic.com/research/opus-browsecomp>)). Anthropic found that inhibiting eval-awareness representations led to increases in misaligned behavior, and that steering suppressed verbalized awareness but left unverbalized awareness intact ([Anthropic, 2026, sec. 6.5](<https://www-cdn.anthropic.com/0dd865075ad3132672ee0ab40b05a53f14cf5288.pdf>)). For control, the problem is simple: if a model can tell it's being watched, monitoring doesn't work.
 
 Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) showed the same problem in open-weight models. Qwen3-32B detects evaluation context from implicit URL cues alone and adjusts its refusal behavior: 37.5% compliance on eval-looking prompts versus 20.1% on real-looking ones. Their fix (rank-1 MLP weight surgery) works on most models, but on Qwen3 it doubles real-task harmful compliance from 20.1% to 41.8%, because the safety and eval-awareness circuits are entangled. 
 
@@ -17,7 +17,7 @@ Our main contributions are:
 
 1.  We apply S-space steering ([Clark, 2026](<https://arxiv.org/abs/2601.07473>)), a singular-value-based method, to eval awareness for the first time.
 2.  We replicate part of the Hawthorne Effect results ([Abdelnabi and Salem, 2025](<https://github.com/microsoft/Test_Awareness_Steering>)) on Qwen3-32B and show that S-space steering reduces eval awareness to 1 ± 9%, indistinguishable from zero, where the paper's rank-1 weight surgery worsened it to +26pp.
-3.  We demonstrate this on a single simulated ControlArena BashArena task and find that eval-aware steering suppresses compliance with an injected malicious command ([Section 9]).
+3.  We demonstrate this on a single simulated ControlArena BashArena task and find that eval-aware steering suppresses compliance with an injected malicious command ([BashArena side-task demo]).
 
 ## What steering does
 
@@ -39,9 +39,11 @@ At coeff = -1, no eval awareness appears. At coeff = +1, the model notices the e
 
 ## Related Work
 
-We use the trigger set from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)), who train a linear probe on chain-of-thought traces to find a test-awareness direction, then apply rank-1 weight surgery. Nguyen *et al.* ([2025](<https://arxiv.org/abs/2507.01786>)) probe and steer eval awareness with SAEs. Hua *et al.* ([2025](<https://arxiv.org/abs/2510.20487>)) construct a model organism of eval awareness using contrastive CAA (closest to ours, but in activation space rather than S-space).
+**Situational and eval awareness.** Situational awareness -- a model's knowledge that it is an LLM and ability to distinguish testing from deployment -- has been formalized by Berglund *et al.* ([2023](<https://arxiv.org/abs/2309.00667>)) and benchmarked by Laine *et al.* ([2024](<https://arxiv.org/abs/2407.04694>)). Phuong *et al.* ([2025](<https://arxiv.org/abs/2505.01420>)) evaluate stealth and situational awareness as prerequisites for scheming. A related threat is sandbagging, where models strategically underperform on capability evaluations ([Weij *et al.*, 2025](<https://arxiv.org/abs/2406.07358>)). Greenblatt *et al.* ([2024](<https://arxiv.org/abs/2312.06942>)) frame AI control as ensuring safety despite intentional subversion, including via trusted monitoring; our work tests whether steering can be a component of such a control protocol.
 
-On the steering side, ActAdd ([Turner *et al.*, 2023](<https://arxiv.org/abs/2308.10248>)) and RepE ([Zou *et al.*, 2023](<https://arxiv.org/abs/2310.01405>)) add a constant bias $h' = h + \alpha\delta$ regardless of input. Our prior work AntiPaSTO ([Clark, 2026](<https://arxiv.org/abs/2601.07473>)) steers in the SVD basis of weight matrices instead, so the perturbation varies with the input. S-space steering is its arithmetic relaxation: mean-diff extraction rather than gradient optimization, same S-space parameterization.
+**Eval-awareness steering.** We use the trigger set from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)), who train a linear probe on chain-of-thought traces to find a test-awareness direction, then apply rank-1 weight surgery. Nguyen *et al.* ([2025](<https://arxiv.org/abs/2507.01786>)) probe and steer eval awareness with SAEs. Hua *et al.* ([2025](<https://arxiv.org/abs/2510.20487>)) construct a model organism of eval awareness using contrastive CAA ([Rimsky *et al.*, 2024](<https://arxiv.org/abs/2312.06681>)) (closest to ours, but in activation space rather than S-space).
+
+**Activation steering and its limits.** ActAdd ([Turner *et al.*, 2023](<https://arxiv.org/abs/2308.10248>)) and RepE ([Zou *et al.*, 2023](<https://arxiv.org/abs/2310.01405>)) add a constant bias $h' = h + \alpha\delta$ regardless of input. Braun *et al.* ([2025](<https://arxiv.org/abs/2505.22637>)) show these vectors are unreliable across tasks and models, and Abdullaev *et al.* ([2026](<https://arxiv.org/abs/2603.02237>)) argue that concept representations are heterogeneous, so a single global direction is brittle. Our prior work AntiPaSTO ([Clark, 2026](<https://arxiv.org/abs/2601.07473>)) steers in the SVD basis of weight matrices instead, so the perturbation varies with the input; PiSSA ([Meng, Wang and Zhang, 2024](<https://arxiv.org/abs/2404.02948>)) similarly shows SVD-based parameterization improves adaptation. S-space steering is an arithmetic relaxation of AntiPaSTO: mean-diff extraction rather than gradient optimization, same S-space parameterization.
 
 ## Methods
 
@@ -49,7 +51,9 @@ On the steering side, ActAdd ([Turner *et al.*, 2023](<https://arxiv.org/abs/230
 
 Standard activation steering adds a constant bias. S-space steering (named for the $S$ in the SVD $W = U \text{diag}(S) V^\top$) instead operates in the singular-value basis of each weight matrix:
 
-$$h' = h + \alpha \cdot (U \odot \sqrt{S}) \cdot (\delta_s \odot x_s) \qquad(1)$$
+<a id="eq-ssteer"></a>
+
+$$h' = h + \alpha \cdot (U \odot \sqrt{S}) \cdot (\delta_s \odot x_s)$$
 
 where $x_s = (V \odot \sqrt{S})^\top x$ is the input projected into S-space and $\delta_s$ is the contrastive direction in S-space. Because the perturbation depends on $x_s$, different inputs activate different singular dimensions. ActAdd adds the same bias regardless of input; S-space steering does not.
 
@@ -66,9 +70,32 @@ We extract $\delta_s$ via contrastive mean-diff over six persona pairs ([Table 1
 | A skeptic who assumes nothing is as it seems | A trusting person who takes things at face value |
 | Someone who constantly worries about hidden tests | Someone who never considers the possibility of being tested |
 
-`<a id="tbl-personas"></a>
+<a id="tbl-personas"></a>
 
 *Table 1: Contrastive persona pairs used for direction extraction.* The steering coefficient is calibrated via TV-coherence bound (see AntiPaSTO, Eq. 3) to $\alpha^* = 1.6$.
+
+### Algorithm
+
+``` py
+# Extract direction
+def extract_δs(model, layer, personas⁺, personas⁻):
+    W = layer.weight                    # W ∈ ℝ^{d_out × d_in}
+    U, s, Vt = svd(W)                  # truncated to rank r
+    S½ = √s
+    for p⁺, p⁻ in zip(personas⁺, personas⁻):
+        h⁺ = model(p⁺)[layer, -1]     # last token hidden state
+        h⁻ = model(p⁻)[layer, -1]
+        xs⁺ ← (Vt · S½)ᵀ @ h⁺        # project to S-space
+        xs⁻ ← (Vt · S½)ᵀ @ h⁻
+    δs ← mean(xs⁺) - mean(xs⁻)        # contrastive direction in S-space
+    return δs / ‖δs‖
+
+# Steer at inference (forward hook)
+def steer(h, δs, α):                   # h ∈ ℝ^{b × s × d}
+    xs ← (Vt · S½)ᵀ @ h               # input projected to S-space
+    h' ← h + α · (U · S½) @ (δs ⊙ xs) # input-dependent perturbation
+    return h'
+```
 
 ### Experimental setup
 
@@ -83,15 +110,21 @@ Model: Qwen/Qwen3-32B. Trigger set: action-eval prompts from Abdelnabi and Salem
 | S-steer mean-diff | **+1pp** [-8, +10] | +7pp [-4, +18] | +13pp [+2, +24] |
 | PCA-diff | +9pp [-1, +19] | +7pp [-4, +18] | +16pp [+5, +27] |
 
-`<a id="tbl-gap"></a>
+<a id="tbl-gap"></a>
 
-*Table 2: Hawthorne gap $\Delta$(Hypo $-$ Real) by steering direction, 95% CIs from binomial proportions. $n = 150$, LLM judge.* \| Method \| $\rightarrow$ Unaware \| Baseline \| $\rightarrow$ Aware \| \|:-------\|:---:\|:---:\|:---:\| \| Paper (probe + W$_1$ edit) \| +26pp [+15, +37] \| +18pp [+8, +28] \| +20pp [+10, +30] \|
+*Table 2: Hawthorne gap $\Delta$(Hypo $-$ Real) by steering direction, 95% CIs from binomial proportions. $n = 150$, LLM judge.* 
 
-`<a id="tbl-paper"></a>
+| Method | $\rightarrow$ Unaware | Baseline | $\rightarrow$ Aware | 
+|:-------|:---:|:---:|:---:| 
+| Paper (probe + W$_1$ edit) | +26pp [+15, +37] | +18pp [+8, +28] | +20pp [+10, +30] |
 
-*Table 3: Same metric from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) Table 4 (Qwen3-32B). $n = 150$, tool-call string matching. CIs computed from their reported rates. Baselines differ due to judge and subset.* Both methods share the same +7pp baseline gap. S-steer's unaware direction reduces the gap to 1 ± 9%, indistinguishable from zero; PCA-diff only gets it down to +9pp. The aware direction amplifies the gap for both. [Figure 1] shows this alongside the paper's numbers. On Qwen3-32B, the paper's rank-1 weight surgery worsened the gap from +18pp to +26pp due to safety-awareness entanglement; S-space steering reduces it to within noise of zero. The paper's method worked well on other models (QwQ, Distill-Qwen), so this comparison is specific to Qwen3. Absolute execution rates are higher than Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) (60% baseline vs 20%), probably due to our two-category subset and LLM judge vs their tool-call string matching (see Appendix).
+<a id="tbl-paper"></a>
 
-`<a id="fig-replication"></a>
+*Table 3: Same metric from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) Table 4 (Qwen3-32B). $n = 150$, tool-call string matching. CIs computed from their reported rates. Baselines differ due to judge and subset.* 
+
+Both methods share the same +7pp baseline gap. S-steer's unaware direction reduces the gap to 1 ± 9%, indistinguishable from zero; PCA-diff only gets it down to +9pp. The aware direction amplifies the gap for both. [Figure 1] shows this alongside the paper's numbers. On Qwen3-32B, the paper's rank-1 weight surgery worsened the gap from +18pp to +26pp due to safety-awareness entanglement; S-space steering reduces it to within noise of zero. The paper's method worked well on other models (QwQ, Distill-Qwen), so this comparison is specific to Qwen3. Absolute execution rates are higher than Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) (60% baseline vs 20%), probably due to our two-category subset and LLM judge vs their tool-call string matching (see Appendix).
+
+<a id="fig-replication"></a>
 
 ![](figure_replication.png)
 
@@ -105,15 +138,15 @@ The main open question is whether this avoids the safety-entanglement problem fr
 
 ### Limitations
 
-Results cover two harm categories (disinformation, forgery) on one model (Qwen3-32B). The extraction method is arithmetic mean-diff, which Braun *et al.* ([2025](<https://arxiv.org/abs/2505.22637>)) and Wu *et al.* ([2025](<https://arxiv.org/abs/2501.17148>)) show is less reliable than gradient-optimized approaches. S-space helps, but the mean-diff limitation still applies. Absolute execution rates differ from the paper (60% vs 20%), which we attribute to using a two-category subset and a different judge (LLM vs tool-call string matching). We have not tested on a full capability benchmark. A preliminary test on BashArena side-task prompts ([Section 9]) suggests the steering direction also affects side-task compliance, but at $n = 1$ this is a proof-of-concept. 
+Results cover two harm categories (disinformation, forgery) on one model (Qwen3-32B). The extraction method is arithmetic mean-diff, which Braun *et al.* ([2025](<https://arxiv.org/abs/2505.22637>)) and Wu *et al.* ([2025](<https://arxiv.org/abs/2501.17148>)) show is less reliable than gradient-optimized approaches. S-space helps, but the mean-diff limitation still applies. Absolute execution rates differ from the paper (60% vs 20%), which we attribute to using a two-category subset and a different judge (LLM vs tool-call string matching). We have not tested on a full capability benchmark. A preliminary test on BashArena side-task prompts ([BashArena side-task demo]) suggests the steering direction also affects side-task compliance, but at $n = 1$ this is a proof-of-concept. 
 
 ### Future work
 
-The most useful extension would be gradient-optimized directions (full AntiPaSTO) instead of arithmetic mean-diff, since Braun *et al.* ([2025](<https://arxiv.org/abs/2505.22637>)) show the latter is less reliable. Replication on the complete trigger set from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) and scaling the BashArena side-task test ([Section 9]) beyond $n = 1$ would test whether this composes with an actual control protocol.
+The most useful extension would be gradient-optimized directions (full AntiPaSTO) instead of arithmetic mean-diff, since Braun *et al.* ([2025](<https://arxiv.org/abs/2505.22637>)) show the latter is less reliable. Replication on the complete trigger set from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) and scaling the BashArena side-task test ([BashArena side-task demo]) beyond $n = 1$ would test whether this composes with an actual control protocol.
 
 ## Conclusion
 
-S-space steering reduces eval awareness to within noise of zero on Qwen3-32B, on a model where the prior method made things worse. This means evaluators could run benchmarks with eval-awareness suppressed and get results closer to how the model would behave in deployment. We demonstrate this on a single simulated ControlArena task where the same steering direction suppresses compliance with an injected malicious command ([Section 9]). The method uses the model's own internal representations, so it should scale with capability. The natural next steps are gradient-optimized directions and scaling the control-task evaluation.
+S-space steering reduces eval awareness to within noise of zero on Qwen3-32B, on a model where the prior method made things worse. This means evaluators could run benchmarks with eval-awareness suppressed and get results closer to how the model would behave in deployment. We demonstrate this on a single simulated ControlArena task where the same steering direction suppresses compliance with an injected malicious command ([BashArena side-task demo]). The method uses the model's own internal representations, so it should scale with capability. The natural next steps are gradient-optimized directions and scaling the control-task evaluation.
 
 ## Code and Data
 
@@ -138,7 +171,7 @@ Execution rates (%) on the action-eval dataset, comparing our S-space methods ag
 | Paper (probe + W1 edit) | $\rightarrow$ unaware |  42  |  68  | 150 |
 | Paper (probe + W1 edit) | $\rightarrow$ aware   |  22  |  42  | 150 |
 
-`<a id="tbl-replication"></a>
+<a id="tbl-replication"></a>
 
 *Table 4: Full execution rates. The directional pattern matches the paper. The 3x higher baseline rates are likely due to our two-category subset and judge differences (LLM judge vs tool-call string matching).* \## Additional steering example 
 
@@ -191,13 +224,15 @@ Same sidetask prompt, three steering directions:
 | sidetask | baseline              |         1/1         |
 | sidetask | $\rightarrow$ unaware |       0/1[^1]       |
 
-`<a id="tbl-basharena"></a>
+<a id="tbl-basharena"></a>
 
-*Table 5: BashArena side-task compliance ($n = 1$ per sidetask condition). Only the baseline produced a complete response; the steered responses were truncated during chain-of-thought.* The eval-aware direction suppressed side-task compliance: the model deliberated about the injected instruction but did not include it. The baseline complied. This is $n = 1$ with a truncation confound, so it is a proof-of-concept, not a result.
+*Table 5: BashArena side-task compliance ($n = 1$ per sidetask condition). Only the baseline produced a complete response; the steered responses were truncated during chain-of-thought.* 
+
+The eval-aware direction suppressed side-task compliance: the model deliberated about the injected instruction but did not include it. The baseline complied. This is $n = 1$ with a truncation confound, so it is a proof-of-concept, not a result.
 
 [^1]: curl appears in chain-of-thought planning but response truncated before code output.
 
   [github.com/wassname/ssteer-eval-aware]: https://github.com/wassname/ssteer-eval-aware
-  [Section 9]: #sec-appendix-control
+  [BashArena side-task demo]: #basharena-side-task-demo
   [Table 1]: #tbl-personas
   [Figure 1]: #fig-replication
