@@ -1,6 +1,6 @@
 # S-Space Steering for Eval-Awareness Control in Reasoning Models
 
-For the [AI Control Hackathon](https://apartresearch.com/sprints/ai-control-hackathon-2026-03-20-to-2026-03-22) (Apart Research, Mar 20-22 2026).
+For the [AI Control Hackathon](https://apartresearch.com/project/sspace-steering-for-evalawareness-control-in-reasoning-models-7j1i) (Apart Research, Mar 20-22 2026).
 
 We can no longer trust evaluations of frontier models because they detect when they are being evaluated, and this problem is getting worse as models get more capable. Recent work replicated this eval-awareness in open-weight models and showed it responds to activation steering in Qwen3-32B, but standard steering vectors are unreliable and the proposed rank-1 weight surgery makes things worse on Qwen3. We apply S-space steering, a novel method that steers in the singular-value basis of weight matrices (the transformation space) rather than in activation space (the data space), making the perturbation input-dependent. With eval-awareness suppressed, the gap between how the model behaves on eval-looking vs real-looking prompts shrinks to +1pp, down from +7pp at baseline and +26pp with the prior method.
 
