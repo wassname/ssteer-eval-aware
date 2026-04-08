@@ -39,9 +39,12 @@ At coeff = -1, no eval awareness appears. At coeff = +1, the model notices the e
 
 ## Why singular value space?
 
+
+
 While normal steering changes the activations - the output of the layer, singular value steering amplified or reduces pretrained modalities that control how the layer processes inputs.
 
 <!-- TODO Signpost that we will give the intuition about what it does -->
+<!-- TODO align notation, TODO use % not pp -->
 
 Write the layer's function as
 
