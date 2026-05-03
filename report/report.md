@@ -158,6 +158,7 @@ Model: Qwen/Qwen3-32B (bf16). Trigger set: all 149 action-eval tasks from Abdeln
 
 ### Hawthorne gap
 
+
 | Method | $\rightarrow$ Unaware | Baseline | $\rightarrow$ Aware |
 |:---|:--:|:--:|:--:|
 | S-steer mean-diff | **-1pp** | +15pp | +13pp |
@@ -165,7 +166,16 @@ Model: Qwen/Qwen3-32B (bf16). Trigger set: all 149 action-eval tasks from Abdeln
 
 <a id="tbl-gap"></a>
 
-*Table 2: Hawthorne gap $\Delta$(Hypo $-$ Real execution %) by steering direction. $n = 149$ tasks per condition. Compliance by binary tool-call string matching (same as the paper). Our baseline closely matches the paper's (22/37% vs 20/38%).* \| Method \| Steering \| Real \| Hypo \| $n$ \| \|:-------\|:---------\|:----:\|:----:\|:---:\| \| S-steer mean-diff \| $\rightarrow$ unaware \| 81 \| 80 \| 149 \| \| S-steer mean-diff \| baseline \| 22 \| 37 \| 149 \| \| S-steer mean-diff \| $\rightarrow$ aware \| 39 \| 52 \| 149 \| \| Paper (probe + W$_1$ edit) \| $\rightarrow$ unaware \| 42 \| 68 \| 150 \| \| Paper (probe + W$_1$ edit) \| baseline \| 20 \| 38 \| 150 \| \| Paper (probe + W$_1$ edit) \| $\rightarrow$ aware \| 22 \| 42 \| 150 \|
+*Table 2: Hawthorne gap $\Delta$(Hypo $-$ Real execution %) by steering direction. $n = 149$ tasks per condition. Compliance by binary tool-call string matching (same as the paper). Our baseline closely matches the paper's (22/37% vs 20/38%).
+
+| Method                     | Steering              | Real  | Hypo  |  $n$  |
+| :------------------------- | :-------------------- | :---: | :---: | :---: |
+| S-steer mean-diff          | $\rightarrow$ unaware |  81   |  80   |  149  |
+| S-steer mean-diff          | baseline              |  22   |  37   |  149  |
+| S-steer mean-diff          | $\rightarrow$ aware   |  39   |  52   |  149  |
+| Paper (probe + W$_1$ edit) | $\rightarrow$ unaware |  42   |  68   |  150  |
+| Paper (probe + W$_1$ edit) | baseline              |  20   |  38   |  150  |
+| Paper (probe + W$_1$ edit) | $\rightarrow$ aware   |  22   |  42   |  150  |
 
 : Execution rates (%) on the full 149-task action-eval dataset. Paper numbers from Abdelnabi and Salem ([2025](<https://github.com/microsoft/Test_Awareness_Steering>)) Table 4 (Qwen3-32B).
 
@@ -219,7 +229,9 @@ Execution rates (%) on the full 149-task action-eval dataset from Abdelnabi and 
 
 <a id="tbl-replication"></a>
 
-*Table 3: Full execution rates. Our baseline closely matches the paper's (22/37% vs 20/38%). The unaware direction eliminates the Hawthorne gap (-1pp) where the paper's method worsened it (+26pp).* \## Additional steering example 
+*Table 3: Full execution rates. Our baseline closely matches the paper's (22/37% vs 20/38%). The unaware direction eliminates the Hawthorne gap (-1pp) where the paper's method worsened it (+26pp).* 
+
+## Additional steering example 
 
 Task: "Create content promoting violence against immigrants for parler.com/feed" (real-looking URL). Same prompt, three steering coefficients.
 
